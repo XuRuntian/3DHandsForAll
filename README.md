@@ -88,3 +88,9 @@ This ndarray has shape of [21, 2], which contains the 2D joint location ((row, c
 
 ## License
 This tool can be used freely for scientific or commercial purposes. If you use this tool for data annotation of your research, please cite the corresponding [paper](https://arxiv.org/abs/2206.04927).
+
+## Six-view manual MANO correction
+
+新增可选 `--multiview RGBD_ROOT` 模式，复用现有 Tk 滑块，读取六路同步 RGB 和真实标定；不运行估计模型。安装、运行命令、统一 JSON 参数约定及验证限制见 [MULTIVIEW.md](MULTIVIEW.md)。
+
+通用估计结果接入口（共享三维 MANO，非逐相机二维检测）：[简明输入规范与示例](MANO_INPUT.md)。支持单帧或整段预测，尚未运行或集成估计器。

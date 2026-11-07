@@ -7,7 +7,7 @@ import torch
 from collections import OrderedDict
 import tkinter as tk
 from PIL import Image, ImageTk
-import mano_wrapper
+# Legacy renderer is imported only for single-view mode.
 from utils import *
 import params
 
@@ -31,6 +31,7 @@ class pose_annotation_app:
         self.init_kpts_projector()
         
     def init_variables(self):
+        import mano_wrapper
         self.mano_fit_tool = mano_wrapper.mano_fitter(params.MANO_PATH, is_annotating = True)
         self.mano_fit_tool.set_input_size(params.IMG_SIZE)
         self.img_left, self.img_center, self.img_right = None, None, None
@@ -1208,10 +1209,20 @@ class pose_annotation_app:
         
 def parse():
     parser = argparse.ArgumentParser()
-    # [Optional] Add arguments here
+    parser.add_argument("--multiview", metavar="RGBD_ROOT")
+    parser.add_argument("--mano-root", default=params.MANO_PATH)
+    parser.add_argument("--hand-side", choices=("left", "right"), default="right")
+    parser.add_argument("--output", default="annotations_multiview")
+    parser.add_argument("--input", help="Unified single-frame, sequence predictions, or correction JSON")
+    parser.add_argument("--frame-id", default="0")
+    parser.add_argument("--device", default="cpu")
     return parser.parse_args()
 
 if __name__ == '__main__':
     args = parse()
-    annotator_ui_app = pose_annotation_app(args)
+    if args.multiview:
+        from multiview_annotator import MultiViewApp
+        annotator_ui_app = MultiViewApp(args)
+    else:
+        annotator_ui_app = pose_annotation_app(args)
     annotator_ui_app.run_app()
