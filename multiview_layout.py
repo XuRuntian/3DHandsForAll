@@ -73,7 +73,7 @@ class MultiViewLayout:
         title = tk.Frame(sidebar, bg=PANEL)
         title.grid(row=0, column=0, sticky='ew', padx=12, pady=10)
         tk.Label(title, text='编辑当前手', bg=PANEL, fg=TEXT, font=self.title_font).pack(side='left')
-        self.ui_button(title, '恢复初值', self.restore).pack(side='right')
+        self.ui_button(title, '恢复载入值', self.restore).pack(side='right')
         self.control_scroll = tk.Canvas(sidebar, bg=PANEL, highlightthickness=0, width=450)
         self.control_scroll.grid(row=1, column=0, sticky='nsew')
         scrollbar = ttk.Scrollbar(sidebar, command=self.control_scroll.yview)
@@ -176,6 +176,7 @@ class MultiViewLayout:
             self.finger_buttons[name]=button
         select_finger('食指')
         tk.Label(tabs['手指'], text='先调整体弯曲，再微调各关节。', bg=PANEL, fg=MUTED).pack(side='bottom', pady=10)
+        tk.Label(tabs['手型'], text='手型由当前手整段共享，修改会影响所有帧。', bg=PANEL, fg=MUTED, wraplength=330).pack(padx=8,pady=8)
         self.shape_vars = []
         for i in range(10):
             var = tk.DoubleVar(value=self.mano_fit_tool.state['betas'][i])

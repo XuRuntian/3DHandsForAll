@@ -91,6 +91,6 @@ This tool can be used freely for scientific or commercial purposes. If you use t
 
 ## Six-view manual MANO correction
 
-新增可选 `--multiview RGBD_ROOT` 模式，复用现有 Tk 滑块，读取六路同步 RGB 和真实标定；不运行估计模型。安装、运行命令、统一 JSON 参数约定及验证限制见 [MULTIVIEW.md](MULTIVIEW.md)。
+新增 `--project inputs/manifest.json` 模式：读取图像相对路径、明确标定和统一多视角 MANO 参数，复用现有 Tk 滑块进行中文六视角人工修正。输出整段 `final/mano.npz` 与 `metadata.json`，支持共享手型、自动恢复已有 final；不运行估计、同步或去畸变。
 
-通用估计结果接入口（共享三维 MANO，非逐相机二维检测）：[简明输入规范与示例](MANO_INPUT.md)。支持单帧或整段预测，尚未运行或集成估计器。
+[运行与测试说明](MULTIVIEW.md) · [统一输入输出规范](MANO_INPUT.md)。HO-Cap 转换作为独立 CLI 示例，编辑器不依赖估计器原生格式。

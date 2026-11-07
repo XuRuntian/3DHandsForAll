@@ -13,7 +13,8 @@ import numpy as np
 BUNDLE = Path(os.environ.get('HOCAP_TEST_ROOT','/home/xrt/Downloads/hocap_hand_v1'))
 MODELS = Path(os.environ.get('MANO_TEST_ROOT','/home/xrt/models/mano_v1_2/models'))
 try:
-    from hocap_adapter import HoCapSequence, convert_predictions
+    from hocap_adapter import HoCapSequence, convert_predictions, export_project
+    from sequence_store import ManoSequence
     from mano_io import parse_sequence, read_annotation
     from multiview_annotator import MultiViewApp
     AVAILABLE = BUNDLE.is_dir() and (MODELS/'MANO_LEFT.pkl').is_file()
@@ -75,8 +76,11 @@ class HoCapImportTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('DISPLAY'),'Requires display')
     def test_actual_import_edit_save_reload_and_switch(self):
         with tempfile.TemporaryDirectory() as output:
-            args = SimpleNamespace(multiview=str(BUNDLE),mano_root=str(MODELS),
-                output=output,frame_id='0',hand_side='right',input=None,device='cpu')
+            project = Path(output)/'project'
+            manifest = export_project(BUNDLE,MODELS,project)
+            args = SimpleNamespace(project=str(manifest),multiview=None,mano_root=str(MODELS),
+                output=str(project/'final'),frame_id='0',hand_side='right',
+                input=str(project/'predictions/hocap_v1/mano.npz'),device='cpu')
             app = MultiViewApp(args)
             errors=[]
             app.window.report_callback_exception=lambda *e:errors.append(str(e[1]))
@@ -84,7 +88,7 @@ class HoCapImportTests(unittest.TestCase):
                 app.window.update();app.render()
                 original=copy.deepcopy(app.original)
                 self.assertEqual(app.mano_fit_tool.state,original)
-                self.assertEqual(len(app.predictions),518)
+                self.assertEqual(app.document.arrays['valid'].sum(),518)
                 for side in ('right','left'):
                     if app.side!=side:app.switch_side()
                     before=copy.deepcopy(app.mano_fit_tool.state)
@@ -98,9 +102,8 @@ class HoCapImportTests(unittest.TestCase):
                     self.assertNotEqual(app.mano_fit_tool.state['pose'],before['pose'])
                     corrected=copy.deepcopy(app.mano_fit_tool.state)
                     path=app.save()
-                    saved_original,saved_corrected=read_annotation(path,app.sequence.coordinate_system,'0')
-                    self.assertEqual(saved_original,before)
-                    self.assertEqual(saved_corrected,corrected)
+                    saved = ManoSequence.load(path)
+                    self.assertEqual(saved.record(0,side),corrected)
                     app.restore();app._read(path);app.sync_controls();app.render()
                     self.assertEqual(app.mano_fit_tool.state,corrected)
                     app.navigate(1);app.navigate(-1)

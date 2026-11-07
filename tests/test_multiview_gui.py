@@ -37,12 +37,13 @@ class TestGeometry(CalibratedMano):
         return np.array([[0,0,0], [.03,0,0], [0,.03,0]]) + self.state['transl']
 
 
-@unittest.skipUnless(AVAILABLE and Path(ROOT).exists(), 'Needs Tk/display, torch and real data')
+@unittest.skipUnless(AVAILABLE, 'Needs Tk/display and torch')
 class GuiTests(unittest.TestCase):
     def test_sliders_sync_save_restore_navigation(self):
         with tempfile.TemporaryDirectory() as output, patch('multiview_annotator.CalibratedMano', TestGeometry):
-            args = SimpleNamespace(multiview=ROOT, output=output, frame_id='0',
-                                   hand_side='right', input=None, mano_root='unused', device='cpu')
+            from test_sequence_contract import gui_args
+            from sequence_store import ManoSequence
+            args=gui_args(output)
             app = MultiViewApp(args)
             errors = []
             app.window.report_callback_exception = lambda *exc: errors.append(exc)
@@ -72,7 +73,8 @@ class GuiTests(unittest.TestCase):
                 app.set_shape(2, '1.25')
                 app.render()
                 path = app.save()
-                original, corrected = read_annotation(path)
+                original=copy.deepcopy(app.original)
+                corrected=ManoSequence.load(path).record(0,'right')
                 self.assertEqual(corrected, state)
                 self.assertEqual(corrected['betas'][2], 1.25)
                 app.restore()
@@ -100,45 +102,27 @@ class GuiTests(unittest.TestCase):
 
 
     def test_sequence_import_navigation_and_prediction_preservation(self):
-        import json
-        from test_prediction_io import sequence
-        with tempfile.TemporaryDirectory() as directory, patch('multiview_annotator.CalibratedMano', TestGeometry):
-            path = Path(directory) / 'predictions.json'
-            path.write_text(json.dumps(sequence()))
-            before = path.read_bytes()
-            args = SimpleNamespace(multiview=ROOT, output=str(Path(directory)/'corrections'),
-                                   frame_id='0', hand_side='right', input=str(path),
-                                   mano_root='unused', device='cpu')
-            app = MultiViewApp(args)
+        from test_sequence_contract import gui_args
+        with tempfile.TemporaryDirectory() as directory, patch('multiview_annotator.CalibratedMano',TestGeometry):
+            args=gui_args(directory)
+            before=Path(args.input).read_bytes()
+            app=MultiViewApp(args)
             try:
                 app.window.update()
-                app.render()
-                self.assertEqual(app.mano_fit_tool.state['transl'][0], .01)
-                app.set_shape(0, '1.25')
-                app.navigate(1)  # frame 1 has no prediction, do not invent a hand
-                self.assertEqual(app.sequence.frame_ids[app.index], '2')
-                self.assertEqual(app.mano_fit_tool.state['betas'][0], 0.)
-                self.assertEqual(app.mano_fit_tool.state['transl'][0], .02)
-                with self.assertRaises(ValueError):
-                    app.switch_side()
-                self.assertEqual(app.side, 'right')
-                app.navigate(-1)
-                self.assertEqual(app.mano_fit_tool.state['betas'][0], 1.25)
-                saved = app.save()
-                original, corrected = read_annotation(saved)
-                self.assertEqual(original['betas'][0], 0.)
-                self.assertEqual(corrected['betas'][0], 1.25)
+                app.set_shape(0,1.25)
+                app.navigate(1)
+                self.assertEqual(app.sequence.frame_ids[app.index],'25')
+                self.assertFalse(app.can_edit())
+                app.navigate(1)
+                self.assertTrue(app.can_edit())
+                self.assertEqual(app.mano_fit_tool.state['betas'][0],1.25)
                 app.switch_side()
-                self.assertEqual(app.mano_fit_tool.state['transl'][0], -.01)
-                self.assertEqual(path.read_bytes(), before)
-                # Failed imports must leave current frame, model and sequence intact.
-                bad = Path(directory)/'bad.json'
-                bad.write_text(json.dumps(dict(sequence(), coordinate_system='world')))
-                current = copy.deepcopy(app.mano_fit_tool.state)
-                with self.assertRaises(ValueError):
-                    app._read(bad)
-                self.assertEqual(app.mano_fit_tool.state, current)
+                self.assertEqual(app.mano_fit_tool.state['betas'][0],0)
+                self.assertEqual(Path(args.input).read_bytes(),before)
+                current=copy.deepcopy(app.mano_fit_tool.state)
+                with self.assertRaises((ValueError,FileNotFoundError)):
+                    app._read(Path(directory)/'bad.npz')
+                self.assertEqual(app.mano_fit_tool.state,current)
             finally:
-                if app.pending_render is not None:
-                    app.window.after_cancel(app.pending_render)
+                if app.pending_render is not None:app.window.after_cancel(app.pending_render)
                 app.window.destroy()

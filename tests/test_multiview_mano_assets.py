@@ -21,15 +21,18 @@ except ImportError:
     AVAILABLE = False
 
 
-@unittest.skipUnless(AVAILABLE and DATA_ROOT.exists(), 'Requires local MANO assets and runtime')
+@unittest.skipUnless(AVAILABLE, 'Requires local MANO assets and runtime')
 class RealManoTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.sequence = MultiViewSequence(DATA_ROOT)
+        from test_sequence_contract import fixture
+        cls.temporary=tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temporary.cleanup)
+        cls.sequence,_ = fixture(cls.temporary.name)
 
     def state(self, side):
         state = default_parameters('0', side, self.sequence.coordinate_system)
-        state['transl'] = self.sequence.initial_translation()
+        state['transl'] = [0.,0.,.7]
         return state
 
     def test_both_models_edit_projection_and_exact_reload(self):
@@ -69,8 +72,8 @@ class RealManoTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('DISPLAY'), 'Requires display')
     def test_actual_gui_edit_switch_save_reload(self):
         with tempfile.TemporaryDirectory() as output:
-            args = SimpleNamespace(multiview=str(DATA_ROOT), mano_root=str(MODEL_ROOT),
-                output=output, frame_id='0', hand_side='right', input=None, device='cpu')
+            from test_sequence_contract import gui_args
+            args=gui_args(output,MODEL_ROOT)
             app = MultiViewApp(args)
             errors = []
             app.window.report_callback_exception = lambda *exc: errors.append(exc)
@@ -122,8 +125,8 @@ class RealManoTests(unittest.TestCase):
         import params
         from utils import get_mano_val_from_slider
         with tempfile.TemporaryDirectory() as output:
-            args = SimpleNamespace(multiview=str(DATA_ROOT), mano_root=str(MODEL_ROOT),
-                output=output, frame_id='0', hand_side='right', input=None, device='cpu')
+            from test_sequence_contract import gui_args
+            args=gui_args(output,MODEL_ROOT)
             app = MultiViewApp(args)
             errors = []
             app.window.report_callback_exception = lambda *e: errors.append(str(e[1]))

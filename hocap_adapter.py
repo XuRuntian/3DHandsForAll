@@ -140,20 +140,63 @@ def convert_predictions(sequence, model_root, path=None):
     return payload
 
 
+
+def export_project(bundle, model_root, destination, copy_images=False):
+    """Standalone conversion only: no GUI dependencies, no estimation/rectification.
+
+    The new image manifest can reference existing RGB, or copy already-rectified
+    RGB into inputs so the exported project is independent of the entire bundle.
+    """
+    import os
+    import shutil
+    from image_manifest import ImageSequence
+    from sequence_store import ManoSequence, metadata
+    destination=Path(destination).resolve()
+    sequence=HoCapSequence(bundle)
+    if destination.is_relative_to(sequence.root) or destination.exists():
+        raise ValueError('Destination must be new and outside the source bundle')
+    payload=convert_predictions(sequence,model_root)
+    inputs=destination/'inputs';inputs.mkdir(parents=True)
+    manifest=dict(schema='multiview_images_v1',units='meter',master_serial=sequence.master_serial,
+                  extrinsic_convention=CONVENTION,cameras={},frames=[])
+    for cid,cam in sequence.cameras.items():
+        manifest['cameras'][cid]=dict(serial=cam.serial,T_master_from_camera=cam.master_from_camera.tolist(),
+            intrinsics=dict(width=cam.size[0],height=cam.size[1],fx=cam.K[0,0],fy=cam.K[1,1],
+                            ppx=cam.K[0,2],ppy=cam.K[1,2],model=cam.model,coeffs=cam.D.tolist()))
+    for frame in sequence.frames:
+        images={}
+        for cid,item in frame['cameras'].items():
+            source=sequence.image_path(item['color_path'])
+            if copy_images:
+                target=inputs/'rgb'/cid/source.name;target.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copyfile(source,target)
+            else:target=source
+            images[cid]=os.path.relpath(target,inputs)
+        manifest['frames'].append(dict(frame_id=str(frame['frame_id']),images=images))
+    path=inputs/'manifest.json';path.write_text(json.dumps(manifest,indent=2)+'\n')
+    images=ImageSequence(path)
+    records=parse_sequence(payload,images.coordinate_system,images.frame_ids)
+    doc=ManoSequence.from_records(records,images.frame_ids,metadata(images.coordinate_system,images.manifest_sha256))
+    doc.save(destination/'predictions/hocap_v1')
+    return path
+
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='Validate and export a rectified HO-Cap hand bundle on CPU')
+    parser=argparse.ArgumentParser(description='Independent HO-Cap -> unified input converter; CPU only')
     parser.add_argument('bundle')
     parser.add_argument('--mano-root',required=True)
-    parser.add_argument('--output',required=True)
-    args = parser.parse_args()
-    sequence = HoCapSequence(args.bundle)
-    output = Path(args.output).resolve()
-    if output.is_relative_to(sequence.root):
-        raise ValueError('Export must be outside the source bundle')
-    payload = convert_predictions(sequence,args.mano_root)
-    output.parent.mkdir(parents=True,exist_ok=True)
-    with output.open('x') as f:
-        json.dump(payload,f,indent=2,allow_nan=False)
-    print(json.dumps(payload['source'],indent=2))
-    print(f'Exported {len(payload["frames"])} frames to {output}')
+    outputs=parser.add_mutually_exclusive_group(required=True)
+    outputs.add_argument('--export-project',help='New destination directory for unified inputs and predictions')
+    outputs.add_argument('--output',help='Legacy JSON export (not the new editor input)')
+    parser.add_argument('--copy-images',action='store_true',help='Copy existing rectified RGB; never rectify or move sources')
+    args=parser.parse_args()
+    if args.export_project:
+        print(export_project(args.bundle,args.mano_root,args.export_project,args.copy_images))
+    else:
+        sequence=HoCapSequence(args.bundle)
+        output=Path(args.output).resolve()
+        if output.is_relative_to(sequence.root):raise ValueError('Export must be outside source bundle')
+        payload=convert_predictions(sequence,args.mano_root)
+        output.parent.mkdir(parents=True,exist_ok=True)
+        with output.open('x') as f:json.dump(payload,f,indent=2,allow_nan=False)
+        print(output)

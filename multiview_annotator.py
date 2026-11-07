@@ -8,10 +8,12 @@ from tkinter import filedialog, messagebox, font
 import cv2
 import numpy as np
 from pose_annotator import pose_annotation_app
-from multiview_data import open_sequence, mesh_overlay
+from multiview_data import mesh_overlay
 from multiview_mano import CalibratedMano
 from multiview_layout import MultiViewLayout
-from mano_io import default_parameters, read_annotation, save_revision, parse_sequence, SEQUENCE_SCHEMA
+from sequence_store import ManoSequence, revision
+from image_manifest import ImageSequence
+from mano_io import default_parameters
 
 
 FIELD_LABELS = {'pose': '手指关节', 'global_orient': '整体旋转',
@@ -21,25 +23,27 @@ FIELD_LABELS = {'pose': '手指关节', 'global_orient': '整体旋转',
 class MultiViewApp(MultiViewLayout, pose_annotation_app):
     def __init__(self, args):
         self.args = args
-        self.sequence = open_sequence(args.multiview)
-        self.output = Path(args.output).resolve()
-        # Protect the complete original dataset, including its metadata directories.
-        if self.output.is_relative_to(self.sequence.root.parent):
-            raise ValueError('保存目录必须位于原始数据目录之外。')
-        self.index = self.sequence.frame_ids.index(str(args.frame_id))
+        self.document = None
+        self.project_mode = True
+        manifest = getattr(args, 'project', None) or args.multiview
+        if not Path(manifest).is_file():
+            raise ValueError('请使用 --project 指定统一图像 manifest.json；原始估计包需要先通过独立适配器转换。')
+        self.sequence = ImageSequence(manifest)
+        default_output = self.sequence.root.parent / 'final'
+        self.output = Path(args.output or default_output).resolve()
+        self.index = self.sequence.frame_ids.index(str(args.frame_id) if args.frame_id is not None else self.sequence.frame_ids[0])
         self.side = args.hand_side
-        self.cache = {}
-        self.predictions = {}
-        self.prediction_path = None
         self.source = None
         self.pending_render = None
         self.is_debugging = False
         self.joint_selected = 0
-        initial_input = args.input or getattr(self.sequence, "prediction_file", None)
-        if initial_input:
-            self._read(initial_input)
-        else:
-            self._new_state()
+        if self.output == self.sequence.root or self.output.is_relative_to(self.sequence.root):
+            raise ValueError('final 必须位于图像清单输入目录之外。')
+        initial_input = self.output / 'mano.npz' if (self.output / 'mano.npz').exists() else args.input
+        if not initial_input:
+            raise ValueError('首次使用需要 --input 指定统一 mano.npz；工具不运行估计或生成默认预测。')
+        self.output_revision = revision(self.output)
+        self._read(initial_input)
         self.window = tk.Tk()
         self.configure_chinese_ui()
         self.window.title('六视角 MANO 人工修正 — 主相机 ' + self.sequence.master_id)
@@ -120,58 +124,34 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
             messagebox.showerror('操作失败', self.error_text(exc), parent=self.window)
 
     def _new_state(self):
-        key = (self.sequence.frame_ids[self.index], self.side)
-        if key in self.cache:
-            original, state, source = self.cache[key]
-        elif self.predictions:
-            if key not in self.predictions:
-                raise ValueError('当前帧没有这只手的预测；未使用默认姿态替代。')
-            state = copy.deepcopy(self.predictions[key])
-            original, source = copy.deepcopy(state), self.prediction_path
-        else:
-            state = default_parameters(key[0], self.side, self.sequence.coordinate_system)
-            state['transl'] = self.sequence.initial_translation()
-            original, source = copy.deepcopy(state), None
-        tool = CalibratedMano(self.args.mano_root, state, self.args.device)
-        self.mano_fit_tool = tool
-        self.original, self.source = copy.deepcopy(original), source
-        self.saved_state = json.dumps(tool.state, sort_keys=True)
-        self.reset_history()
-
-    def _read(self, path):
-        if Path(path).suffix.lower() == '.npz':
-            from hocap_adapter import HoCapSequence, convert_predictions
-            if not isinstance(self.sequence, HoCapSequence):
-                raise ValueError('请先使用对应 HO-Cap 数据包启动，再加载其 NPZ 结果。')
-            payload = convert_predictions(self.sequence, self.args.mano_root, path)
-        else:
-            payload = json.loads(Path(path).read_text())
-        if payload.get('schema') == SEQUENCE_SCHEMA:
-            predictions = parse_sequence(payload, self.sequence.coordinate_system, self.sequence.frame_ids)
-            # Select the current frame/hand if present, otherwise the first available
-            # record in dataset order. Validate/load before changing the live state.
-            key = (self.sequence.frame_ids[self.index], self.side)
-            if key not in predictions:
-                key = min(predictions, key=lambda k: (self.sequence.frame_ids.index(k[0]), k[1] != self.side))
-            state = predictions[key]
-            tool = CalibratedMano(self.args.mano_root, state, self.args.device)
-            index = self.sequence.frame_ids.index(key[0])
-            images = self.sequence.images(index)
-            self.predictions, self.prediction_path = predictions, str(Path(path).resolve())
-            self.cache = {}
-            self.index, self.side, self.images = index, key[1], images
-            self.original, self.mano_fit_tool = copy.deepcopy(state), tool
-            self.source = self.prediction_path
-            self.saved_state = json.dumps(tool.state, sort_keys=True)
+        if self.document is not None:
+            state = self.document.record(self.index,self.side)
+            self.current_valid = state is not None
+            if state is None:
+                # A hidden control placeholder only; never rendered or persisted as valid.
+                state = default_parameters(self.sequence.frame_ids[self.index],self.side,self.sequence.coordinate_system)
+            self.mano_fit_tool = CalibratedMano(self.args.mano_root,state,self.args.device)
+            self.original = self.baseline.record(self.index,self.side) or copy.deepcopy(state)
+            self.saved_state = json.dumps(state,sort_keys=True)
             self.reset_history()
             return
-        original, state = read_annotation(path, self.sequence.coordinate_system,
-                                          self.sequence.frame_ids[self.index])
-        tool = CalibratedMano(self.args.mano_root, state, self.args.device)
-        self.original, self.mano_fit_tool = original, tool
-        self.side, self.source = state['hand_side'], str(Path(path).resolve())
-        self.saved_state = ''  # imported state should be preserved on navigation
-        self.reset_history()
+
+    def _read(self, path):
+        if self.project_mode:
+            document = ManoSequence.load(path,self.sequence.coordinate_system,self.sequence.manifest_sha256)
+            loaded_revision = document.disk_revision
+            document = document.aligned(self.sequence.frame_ids)
+            # Validate model availability before changing the active document.
+            candidate = document.record(self.index,self.side) or default_parameters(
+                self.sequence.frame_ids[self.index],self.side,self.sequence.coordinate_system)
+            CalibratedMano(self.args.mano_root,candidate,self.args.device)
+            self.document = document
+            self.baseline = copy.deepcopy(document)
+            self.source = str(Path(path).resolve())
+            if Path(path).resolve() == self.output / 'mano.npz':
+                self.output_revision = loaded_revision
+            self._new_state()
+            return
 
     def sync_controls(self):
         previous = self.mano_fit_tool.suspend_edits
@@ -189,8 +169,21 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
                          else self.mano_fit_tool.state['transl'][i-3]*1000.)
                 var.set(f'{value:.3f}')
             self.window.update_idletasks()
+            self.set_controls_enabled()
         finally:
             self.mano_fit_tool.suspend_edits = previous
+
+    def set_controls_enabled(self):
+        if not hasattr(self, '_parameter_widgets'):
+            self._parameter_widgets = []
+            def visit(widget):
+                if 'state' in widget.keys() and widget.winfo_class() not in ('TNotebook',):
+                    self._parameter_widgets.append((widget, str(widget.cget('state'))))
+                for child in widget.winfo_children():
+                    visit(child)
+            visit(self.window.panel_sliders)
+        for widget, original_state in self._parameter_widgets:
+            widget.configure(state=original_state if self.can_edit() else 'disabled')
 
     def set_shape(self, index, value):
         if not self.mano_fit_tool.suspend_edits:
@@ -216,6 +209,10 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         self.gesture_active = False
 
     def checkpoint(self):
+        if self.document is not None:
+            if not self.current_valid:
+                return
+            self.document.update(self.index,self.side,self.mano_fit_tool.state)
         state = self.mano_fit_tool.state
         if not self.gesture_active and state != self.history_state:
             self.undo_stack.append(self.history_state)
@@ -309,8 +306,6 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         fid = self.frame_entry.get().strip()
         if fid not in self.sequence.frame_ids:
             raise ValueError('找不到此帧号，请输入数据中的同步帧编号。')
-        if self.predictions and (fid,self.side) not in self.predictions:
-            raise ValueError('此帧没有当前手的预测，请选择其他帧或切换左右手。')
         self.navigate(self.sequence.frame_ids.index(fid)-self.index)
 
     def update_rendered_img(self):
@@ -324,18 +319,22 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         if self.pending_render is not None:
             self.window.after_cancel(self.pending_render)
         self.pending_render = None
-        self.vertices = self.mano_fit_tool.vertices()  # once for all six views
+        self.vertices = self.mano_fit_tool.vertices() if self.can_edit() else None  # once for all six views
         self.display_images = {}
         for cid, view in self.views.items():
             image = self.view_image(cid, self.sequence.cameras[cid].size, self.overlay.get())
             self.display_images[cid] = image
             view.set_image(image)
+            missing = not self.sequence.has_image(self.index,cid)
+            self.view_titles[cid].configure(text=cid + (' · 主相机' if cid==self.sequence.master_id else '') + (' · 缺少图像' if missing else ''))
         self.focus_view.set_image(self.display_images[self.selected_camera])
         side = '左手' if self.side=='left' else '右手'
         dirty = json.dumps(self.mano_fit_tool.state,sort_keys=True) != self.saved_state
         self.frame_caption.set(f'帧 {self.sequence.frame_ids[self.index]} / {len(self.sequence.frames)} 帧 · {side}')
         self.status.set(('● 未保存修改' if dirty else '已就绪') + ' · 六视角共享当前三维手'
                         + (' · 铺满模式已裁切边缘' if self.fit_mode.get().startswith('铺满') else ''))
+        if not self.can_edit():
+            self.status.set('当前帧这只手无有效多视角拟合结果：不显示网格，不能编辑。')
         for i,scale in enumerate(self.global_scales):
             if i<3:
                 value = np.degrees(self.mano_fit_tool.state['global_orient'][i])
@@ -354,7 +353,8 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
                 self.details.remove(detail)
 
     def view_image(self, cid, size, overlay):
-        if overlay:
+        available = not self.project_mode or self.sequence.has_image(self.index,cid)
+        if overlay and self.vertices is not None and available:
             return mesh_overlay(self.images[cid], self.sequence.cameras[cid], self.vertices,
                                 self.mano_fit_tool.faces, size)
         return cv2.resize(self.images[cid], size)
@@ -405,25 +405,28 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         image = self.view_image(detail['cid'],self.sequence.cameras[detail['cid']].size,detail['overlay'].get())
         view.set_image(image)
 
-    def save(self):
-        path = save_revision(self.output, self.original, self.mano_fit_tool.state, self.source)
-        self.saved_state = json.dumps(self.mano_fit_tool.state, sort_keys=True)
-        self.status.set('已保存：' + path.name)
-        return path
+    def can_edit(self):
+        return self.document is None or self.current_valid
 
+    def save(self):
+        if self.document is not None:
+            self.checkpoint()
+            path = self.document.save(self.output,self.output_revision)
+            self.output_revision = revision(self.output)
+            self.saved_state = json.dumps(self.mano_fit_tool.state,sort_keys=True)
+            self.status.set('已保存整段：' + str(path))
+            return path
     def stash(self):
-        if json.dumps(self.mano_fit_tool.state, sort_keys=True) != self.saved_state:
-            self.save()
-        key = (self.sequence.frame_ids[self.index], self.side)
-        self.cache[key] = (copy.deepcopy(self.original), copy.deepcopy(self.mano_fit_tool.state), self.source)
+        if self.document is not None:
+            self.checkpoint()
+            if json.dumps(self.mano_fit_tool.state,sort_keys=True) != self.saved_state:
+                self.save()
+            return
 
     def navigate(self, delta):
         if delta == 0:
             return
         index = self.index + delta
-        if self.predictions:
-            while 0 <= index < len(self.sequence.frames) and (self.sequence.frame_ids[index], self.side) not in self.predictions:
-                index += delta
         if not 0 <= index < len(self.sequence.frames):
             return
         images = self.sequence.images(index)
@@ -453,7 +456,7 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
 
     def load(self):
         path = filedialog.askopenfilename(parent=self.window, title='加载 MANO 预测或修正结果',
-                                          filetypes=[('MANO 参数文件', '*.json *.npz')])
+                                          filetypes=[('统一 MANO 参数文件', '*.npz')])
         if path:
             self.stash()
             self._read(path)
@@ -515,7 +518,7 @@ for _name in ['button_freeze_rot_callback'] + [f'button_freeze_fin{i}_callback' 
 def _guard_slider_edit(method):
     @wraps(method)
     def callback(self, value):
-        if self.mano_fit_tool.suspend_edits:
+        if self.mano_fit_tool.suspend_edits or not self.can_edit():
             return
         return method(self, value)
     return callback
@@ -524,3 +527,20 @@ def _guard_slider_edit(method):
 for _name in dir(pose_annotation_app):
     if _name.startswith('on_trackbar_mano_'):
         setattr(MultiViewApp, _name, _guard_slider_edit(getattr(pose_annotation_app, _name)))
+
+
+def _require_valid_hand(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        if self.mano_fit_tool.suspend_edits:
+            return
+        if not self.can_edit():
+            self.status.set('当前帧这只手没有有效拟合结果，不能编辑。')
+            return
+        return method(self, *args, **kwargs)
+    return guarded
+
+
+for _name in ['set_shape', 'apply_exact', 'nudge', 'rotate_nudge', 'adjust_global_component',
+              'adjust_shape', 'apply_global_value', 'restore']:
+    setattr(MultiViewApp, _name, _require_valid_hand(getattr(MultiViewApp, _name)))

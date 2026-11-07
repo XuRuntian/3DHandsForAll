@@ -33,12 +33,12 @@ class ViewportGeometryTests(unittest.TestCase):
         self.assertEqual((w,h,x,y),(1280,720,-270.,-210.))
 
 
-@unittest.skipUnless(AVAILABLE and VIEWPORT_AVAILABLE and (Path(ROOT)/'calibration/extrinsics.json').is_file(),
-                         'Needs Tk/display and real data')
+@unittest.skipUnless(AVAILABLE and VIEWPORT_AVAILABLE,'Needs Tk/display')
 class WorkspaceTests(unittest.TestCase):
     def test_resize_focus_nudge_and_undo(self):
         with tempfile.TemporaryDirectory() as output, patch('multiview_annotator.CalibratedMano',TestGeometry):
-            args=SimpleNamespace(multiview=ROOT,output=output,frame_id='0',hand_side='right',input=None,mano_root='unused',device='cpu')
+            from test_sequence_contract import gui_args
+            args=gui_args(output)
             app=MultiViewApp(args)
             errors=[]
             app.window.report_callback_exception=lambda *e:errors.append(e)

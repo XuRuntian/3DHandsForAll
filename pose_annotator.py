@@ -1209,18 +1209,19 @@ class pose_annotation_app:
         
 def parse():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--project", help="Unified image manifest JSON")
     parser.add_argument("--multiview", metavar="RGBD_ROOT")
     parser.add_argument("--mano-root", default=params.MANO_PATH)
     parser.add_argument("--hand-side", choices=("left", "right"), default="right")
-    parser.add_argument("--output", default="annotations_multiview")
-    parser.add_argument("--input", help="Unified single-frame, sequence predictions, or correction JSON")
-    parser.add_argument("--frame-id", default="0")
+    parser.add_argument("--output", default=None)
+    parser.add_argument("--input", help="Unified multiview mano.npz (metadata.json alongside)")
+    parser.add_argument("--frame-id", default=None)
     parser.add_argument("--device", default="cpu")
     return parser.parse_args()
 
 if __name__ == '__main__':
     args = parse()
-    if args.multiview:
+    if args.project or args.multiview:
         from multiview_annotator import MultiViewApp
         annotator_ui_app = MultiViewApp(args)
     else:

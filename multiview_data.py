@@ -129,8 +129,7 @@ class MultiViewSequence:
 
 def open_sequence(root):
     if (Path(root) / 'conversion.json').is_file():
-        from hocap_adapter import HoCapSequence
-        return HoCapSequence(root)
+        raise ValueError('HO-Cap 原始包请先使用 hocap_adapter.py 转换，再使用 --project 加载统一输入。')
     return MultiViewSequence(root)
 
 

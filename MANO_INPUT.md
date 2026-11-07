@@ -1,86 +1,81 @@
-# MANO 输入规范 v1：共享三维结果
+# 统一多视角 MANO 输入输出 v1
 
-**接入位置：多视角拟合之后、人工修正之前。** 输入是每帧每只手的一套共享 3D MANO，六台相机只负责观察和投影。不是各相机独立的 2D 检测、各相机各一套姿态、裸关节点或原始网络输出。
+编辑器只接受已完成多视角拟合、转换为统一约定的 MANO 参数。它不运行估计、三角化、同步、对齐、去畸变或重新优化。不接收单目弱透视结果、裸关节点、原生 PCA 或估计器私有目录。原单视角程序不变；旧 JSON 工具仍可离线使用，但不是新编辑器入口。
 
-这个接口不绑定 HO-Cap：任何估计器经过轻量适配，输出符合下面约定的共享 MANO 都可接入。文件格式标识描述数据含义，不保证上游估计质量。当前未接入或运行估计器；已有针对 sync_lab 独立 HO-Cap 导出包的离线适配器，见 [MULTIVIEW.md](MULTIVIEW.md)。
-
-## 1. 单帧单手：8 个必要字段
-
-| 字段 | 内容 |
-|---|---|
-| `frame_id` | 数据集中同步帧的 ID，例如 `"0"`；不是各相机自己的采集帧号 |
-| `hand_side` | `"right"` 或 `"left"`；被摄者的解剖左右手，不是画面左右 |
-| `pose` | 15×3 或展平的 45 个数：15 个关节的局部轴角，单位弧度 |
-| `betas` | 10 个 MANO 手型参数 |
-| `global_orient` | 3 个数：全局轴角，单位弧度 |
-| `transl` | 3 个数：主相机坐标中的平移，单位米 |
-| `coordinate_system` | `"master_camera:<序列号>"`，本数据为 `"master_camera:338522300613"` |
-| `units` | 必须写 `"meter"`，不自动猜测或转换单位 |
-
-完整有效示例：[examples/mano_frame.json](examples/mano_frame.json)。示例中的零姿态仅展示格式，不是实际估计结果。
-
-固定约定，不必逐次填写：标准 MANO v1.2 资产，10 维 Shape；pose 使用 MANO 原始顺序 **食指、中指、小指、无名指、拇指**，每指由近到远 3 个关节。pose 是绝对局部轴角（`flat_hand_mean=True`），不是 PCA 系数、欧拉角或相对 mean 的偏移。
-
-坐标轴为主 RGB 相机 x 向右、y 向下、z 向前；模型用 `center_idx=None`，保持原生 MANO 原点，转为米后加 transl。**transl 不是直接指定腕关节位置**。Shape、模型版本和原点约定不同的估计器必须先做适配。
-
-为兼容已有保存文件，仍接受原来的显式 `schema_version`、`mano_model_type`、`rotation_representation`、`pose_convention`、`translation_convention` 字段；省略时采用上述固定约定，明确填写不兼容值时拒绝导入。保存时自动补全这些约定，方便结果追溯。
-
-## 2. 整段输入：同样的参数，外加一个帧列表
-
-格式标识固定为 **`mano_multiview_v1`**，表示共享三维结果，而不是相机观测。
+## 文件与职责
 
 ```text
-schema: "mano_multiview_v1"
-coordinate_system: "master_camera:338522300613"
-units: "meter"
-source: 可选，例如估计器名称和版本
-frames:
-  - frame_id: "0"
-    hands:
-      right: {pose, betas, global_orient, transl}
-      left:  {pose, betas, global_orient, transl}
-  - frame_id: "1"
-    hands:
-      right: {pose, betas, global_orient, transl}
+project/
+├── inputs/manifest.json          # 图片相对路径、帧对应及配套标定
+├── predictions/<producer>/
+│   ├── mano.npz                  # 独立适配器生成的统一预测
+│   └── metadata.json
+└── final/
+    ├── mano.npz                  # 整段当前修正结果
+    └── metadata.json
 ```
 
-上面是结构示意；可直接读取的 JSON 示例见 [examples/mano_multiview.json](examples/mano_multiview.json)。
+图像可以在任意已有目录；路径相对于 manifest.json。可以使用 `../`，不接受绝对路径。移动整个项目时保持相对关系；若需要删除估计包，先确保图像不再引用它。输入与输出的 MANO 格式相同。final 独立加载，不引用 predictions，也不保存网格、关节点或投影等可推导数组。
 
-- 左右手可同时提供，也可只提供一只。每个 frame_id 只出现一次，两只手放在同一个 hands 中。
-- 没有可靠结果的手直接省略；两只手都缺失时省略该帧。不要填 `-1` 哨兵、NaN 或用零姿态冒充预测。格式无法判定数值合法的姿态是否可信，质量检查仍由适配器和人工承担。
-- 可只导入一段或少量帧。每个 frame_id 必须存在于当前 RGB 序列；不靠数组下标猜对应关系。
-- 切帧读取目标帧自己的预测。当前 UI 的上一帧/下一帧会跳过所选手没有预测的帧；若该帧没有另一只手，切换手时明确提示。
-- 一帧一手的 Shape 要明确提供，即使整段相同。这样无需额外的被试表或跨文件依赖。
+## 图像清单
 
-## 3. 谁负责转换
+UTF-8 JSON，`schema` 为 `multiview_images_v1`，字段为：
 
-| 上游输出 | 适配器负责的转换 |
-|---|---|
-| HO-Cap 的 PCA 参数 | 按对应左右手 MANO basis 展开，并处理 hands_mean |
-| 旋转矩阵或其他旋转表示 | 转成轴角，不能直接将欧拉角当轴角 |
-| 毫米、其他世界/相机坐标 | 转为米和当前主相机坐标，同时正确处理全局旋转与模型原点 |
-| 以腕点为中心或不同 hand mean | 按模型和 Shape 校正到统一原点、绝对局部姿态 |
-| 只有 2D/3D 关键点、mesh 或弱透视参数 | 先完成 MANO 拟合或位姿恢复，不能直接读作本接口 |
+- `units`: `meter`。
+- `extrinsic_convention`: `p_master = T_master_from_camera @ p_camera (homogeneous column vectors)`。
+- `master_serial`: 主 RGB 相机序列号。
+- `cameras`: 相机 ID 到标定的映射。当前 GUI 要求六台不同相机；每台包括 `serial`、`T_master_from_camera`（4×4 矩阵）及 `intrinsics`。
+- `intrinsics`: `width,height,fx,fy,ppx,ppy,model,coeffs`。其中 `model` 是 `none`、`brown_conrady` 或 `inverse_brown_conrady`；`coeffs` 是五个畸变系数。内参/畸变必须对应实际读取的图片。去畸变图片使用处理后的内参及零畸变。
+- `frames`: 按显示顺序排列的列表，每项含字符串 `frame_id` 和 `images`（相机 ID → 图片相对路径）。帧号唯一。某视角确实缺失时可省略其键或写 `null`；已列出的路径却不存在会报错，不猜测邻帧。
 
-估计器适配器应验证：转换前后产生的 3D 网格经过坐标变换后相同，六视角重投影一致。**仅通过 JSON 校验不等于几何转换正确。** 目前 `hocap_adapter.py` 支持带转换记录的 sync_lab HO-Cap 导出包，并验证全部有效帧网格；其他 HO-Cap 输出布局和 HaMeR 等仍需对应适配器。
+清单定义整段序列及其顺序，不靠连续数字或文件排序推测时间对应。数据准备方负责同步正确性。缺图视角显示提示，且不在占位画面叠加网格。
 
-后续嵌入流程：`运行估计器 → 适配器 → 本规范 JSON → 现有人工编辑器`。估计器可以作为后台进程运行，界面与保存格式不必绑定它的依赖或内部结构。
+## mano.npz
 
-## 4. 导入与保存
+仅含以下命名数组，不使用 pickle/object 数组。T 表示文件内帧数；固定手顺序为 `[right,left]`（被摄者解剖左右手）。
 
-```bash
-# 只检查格式，无需 MANO 模型、GUI 或 GPU
-.venv/bin/python mano_io.py examples/mano_multiview.json \
-  --coordinate-system master_camera:338522300613
+| 字段 | 形状 | 约定 |
+|---|---|---|
+| frame_ids | `[T]` | 唯一字符串帧号 |
+| betas | `[2,10]` | 每只手整段共享的个体形状 |
+| hand_pose | `[T,2,45]` | 15 个局部关节轴角，弧度，绝对姿态，flat_hand_mean=True |
+| global_orient | `[T,2,3]` | 主相机坐标下的整体轴角，弧度 |
+| transl | `[T,2,3]` | 主相机坐标下的平移，米；不是直接指定腕点 |
+| valid | `[T,2]` | bool；true 表示完整可用的拟合参数，不表示人工验收 |
 
-# 示例仅测试格式流程；正式使用时换成适配器导出的结果
-.venv/bin/python pose_annotator.py \
-  --multiview /home/xrt/Downloads/Perspective_Generalization_09/rgbd \
-  --mano-root /home/xrt/models/mano_v1_2/models \
-  --input examples/mano_multiview.json \
-  --output ./annotations_multiview
+数值数组必须是有限浮点数；无效实例用有限占位值及 valid=false 表示，不进行渲染或编辑。不能缺少旋转/平移后伪装成有效手。手型可以是明确采用的零形状（平均手）；这不代表已估计了个体形状。
+
+关节顺序为 MANO 原始顺序：食指、中指、小指、无名指、拇指，各指近端到远端。使用 MANO v1.2、原生模型原点（center_idx=None），先生成米制顶点，再加 transl。适配器负责 PCA 展开、hand mean、旋转表达、单位、坐标变换及原点差异；不靠编辑器猜测。
+
+预测可以只覆盖部分帧并使用不同顺序；加载时根据 frame_ids 对齐到清单。未知帧报错，缺少帧填 valid=false。保存后的 final 覆盖完整图像清单，未修改的有效预测保持原值。逐帧不同的 betas 不能直接进入本规范，适配方须先确定每只手的一套共享形状。
+
+## metadata.json
+
+固定说明如下（序列号和 fingerprint 按实际输入填写）：
+
+```json
+{
+  "schema": "mano_sequence_v1",
+  "stage": "multiview_fitted",
+  "model": "MANO_v1.2",
+  "hand_order": ["right", "left"],
+  "rotation": "axis_angle_radians",
+  "hand_pose_convention": "absolute_flat_hand_mean",
+  "translation_convention": "native_mano_origin",
+  "units": "meter",
+  "axes": "x_right_y_down_z_forward",
+  "coordinate_system": "master_camera:338522300613",
+  "image_manifest_sha256": "<manifest.json 文件字节的 SHA-256，64 位小写十六进制>"
+}
 ```
 
-窗口的 加载结果 也接受整段文件、单帧记录或已保存的修正文件。整段导入时优先选择当前帧和手；不存在时选择数据顺序中的首个可用记录。导入新整段文件前，窗口会保存当前已修改的内容。
+指纹防止同样帧号/相机的不同片段被误配；只包含相对路径的清单整体搬家后无需改变。修改清单内容（含路径或格式）后须由数据准备方重新绑定参数文件，程序不会忽略不一致。metadata 在同一结果目录内保持不变。`stage` 是生产方对数据类型的声明，不是程序能独立证明的拟合质量。
 
-保存仍为独立版本文件，包含完整 `original`、`corrected`、输入来源；不会覆盖估计器结果。会话内切帧保留已编辑状态；重启后先导入预测序列，再用 加载结果 载入需要继续编辑的修正版本。当前没有自动批量合并历史修正或批量导出整段的功能。
+## 保存与恢复
+
+- 点击保存更新一份 `final/mano.npz`。临时文件写入并 fsync 后原子替换；失败不覆盖上一份参数文件。metadata 只初始化一次，不包含逐次变化的信息。
+- 检测同一结果被另一窗口修改，拒绝静默覆盖。需要先关闭冲突窗口，重新载入最新结果，或另开输出目录。
+- 切帧、切手或关闭窗口时保存已修改数据。没有手工修改时不强制创建 final；可点击保存初始化整段结果。
+- 若输出目录已有 mano.npz，启动优先加载它。无需原始预测。恢复载入值指恢复本次加载时的该帧姿态及该手共享形状；它不是跨会话历史版本恢复。
+- 修改 betas 影响当前手所有帧，另一只手不变；姿态/位姿只改当前帧。撤销/重做在当前帧内可撤销共享形状变化，切帧后重置撤销历史。
+- 原始预测、原始图像和标定只读。不在本工具中删除 predictions。
