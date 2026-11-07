@@ -2,6 +2,7 @@
 import copy
 import tempfile
 from types import SimpleNamespace
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 import numpy as np
@@ -32,7 +33,8 @@ class ViewportGeometryTests(unittest.TestCase):
         self.assertEqual((w,h,x,y),(1280,720,-270.,-210.))
 
 
-@unittest.skipUnless(AVAILABLE and VIEWPORT_AVAILABLE,'Needs Tk/display and real data')
+@unittest.skipUnless(AVAILABLE and VIEWPORT_AVAILABLE and (Path(ROOT)/'calibration/extrinsics.json').is_file(),
+                         'Needs Tk/display and real data')
 class WorkspaceTests(unittest.TestCase):
     def test_resize_focus_nudge_and_undo(self):
         with tempfile.TemporaryDirectory() as output, patch('multiview_annotator.CalibratedMano',TestGeometry):

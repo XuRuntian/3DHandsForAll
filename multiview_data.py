@@ -127,6 +127,13 @@ class MultiViewSequence:
         return images
 
 
+def open_sequence(root):
+    if (Path(root) / 'conversion.json').is_file():
+        from hocap_adapter import HoCapSequence
+        return HoCapSequence(root)
+    return MultiViewSequence(root)
+
+
 def mesh_overlay(image, camera, vertices, faces, size=None):
     """Distorted wire mesh on unrectified RGB. No hidden-surface removal."""
     size = size or camera.size

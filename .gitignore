@@ -2,3 +2,4 @@
 __pycache__/
 *.pyc
 annotations_multiview/
+annotations_hocap/

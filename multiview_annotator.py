@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox, font
 import cv2
 import numpy as np
 from pose_annotator import pose_annotation_app
-from multiview_data import MultiViewSequence, mesh_overlay
+from multiview_data import open_sequence, mesh_overlay
 from multiview_mano import CalibratedMano
 from multiview_layout import MultiViewLayout
 from mano_io import default_parameters, read_annotation, save_revision, parse_sequence, SEQUENCE_SCHEMA
@@ -21,7 +21,7 @@ FIELD_LABELS = {'pose': '手指关节', 'global_orient': '整体旋转',
 class MultiViewApp(MultiViewLayout, pose_annotation_app):
     def __init__(self, args):
         self.args = args
-        self.sequence = MultiViewSequence(args.multiview)
+        self.sequence = open_sequence(args.multiview)
         self.output = Path(args.output).resolve()
         # Protect the complete original dataset, including its metadata directories.
         if self.output.is_relative_to(self.sequence.root.parent):
@@ -35,8 +35,9 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         self.pending_render = None
         self.is_debugging = False
         self.joint_selected = 0
-        if args.input:
-            self._read(args.input)
+        initial_input = args.input or getattr(self.sequence, "prediction_file", None)
+        if initial_input:
+            self._read(initial_input)
         else:
             self._new_state()
         self.window = tk.Tk()
@@ -138,7 +139,13 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         self.reset_history()
 
     def _read(self, path):
-        payload = json.loads(Path(path).read_text())
+        if Path(path).suffix.lower() == '.npz':
+            from hocap_adapter import HoCapSequence, convert_predictions
+            if not isinstance(self.sequence, HoCapSequence):
+                raise ValueError('请先使用对应 HO-Cap 数据包启动，再加载其 NPZ 结果。')
+            payload = convert_predictions(self.sequence, self.args.mano_root, path)
+        else:
+            payload = json.loads(Path(path).read_text())
         if payload.get('schema') == SEQUENCE_SCHEMA:
             predictions = parse_sequence(payload, self.sequence.coordinate_system, self.sequence.frame_ids)
             # Select the current frame/hand if present, otherwise the first available
@@ -446,7 +453,7 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
 
     def load(self):
         path = filedialog.askopenfilename(parent=self.window, title='加载 MANO 预测或修正结果',
-                                          filetypes=[('MANO 参数文件', '*.json')])
+                                          filetypes=[('MANO 参数文件', '*.json *.npz')])
         if path:
             self.stash()
             self._read(path)

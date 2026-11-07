@@ -5,3 +5,4 @@ Pillow>=10,<13
 scipy>=1.10,<1.16
 chumpy==0.70
 manopth @ git+https://github.com/hassony2/manopth.git@4f1dcad1201ff1bfca6e065a85f0e3456e1aa32b
+PyYAML>=6,<7

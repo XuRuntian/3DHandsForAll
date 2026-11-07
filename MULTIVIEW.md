@@ -115,3 +115,33 @@ CPU 六视图加一个 1.5× 原图窗口，10 次更新平均约 107 ms/次（�
 修复手指滑块拖动时，程序同步关联滑块再次触发 Tk Scale command，导致 `RecursionError` 的问题。多视角模式在滑块回调入口阻止同步期间的编辑，并避免同步函数嵌套刷新 idle 事件；保留同步前的暂停状态。单视角回调不变。
 
 回归测试通过真实 Tk 鼠标按下、拖动和释放事件，覆盖左右手五根手指的整体弯曲和第一关节滑块，以及撤销、反复同步后导入参数精度不变。完整测试共 21 项，20 项通过，1 项可选 RealSense SDK 测试跳过。启动时 manopth 的只读 NumPy 数组警告仍可能出现，和本次回调递归是不同问题。
+
+## 导入本机 HO-Cap 导出包
+
+已支持 `prepare_hocap_sequence.py` 生成的独立、去畸变、主相机坐标数据包（包含 `conversion.json` 和完成后的 `05_coordinates/mano_world.npz`）。这不是所有 HO-Cap 原生目录的通用加载器。此包来自 `3D_Trajectory_Continuity_01`，不要搭配原来的 Perspective 图像。
+
+```bash
+.venv/bin/python pose_annotator.py \
+  --multiview /home/xrt/Downloads/hocap_hand_v1 \
+  --mano-root /home/xrt/models/mano_v1_2/models \
+  --hand-side right \
+  --output ./annotations_hocap
+```
+
+未指定 `--input` 时自动导入包内最终拟合结果；CPU 即可。使用本包 rectified RGB 与零畸变内参，通过转换记录核对外参方向、主相机和米制单位。使用原始帧索引与导出帧的显式映射，不读取旧机器的绝对路径。
+
+适配器按拟合配置将 PCA45 展开并加对应手的 MANO mean，转换为统一绝对轴角；保留原生 MANO 原点和米制平移。每次导入验证全部有效帧的重建网格与包内 `vertices_world`，最大误差超过 0.01 毫米则拒绝导入，避免不兼容模型/约定静默错位。无效手不填默认姿态。
+
+当前包验证：259 帧、518 套有效手参数；最大网格差异约 0.00026 毫米。所有六路投影与输出 `joints_2d` 数值一致性测试通过。此检查确认导入一致性，不证明估计已经贴合真实手。
+
+操作：选帧 → 切换左/右手 → 选择相机并放大 → 在整体/手指栏修正 → 保存。六视角仍共用一套参数。修正另存到 `annotations_hocap`，包括原始预测和修正值，原包只读。继续某一帧修正时，以相同命令启动、跳到对应帧，再用“加载结果”选择保存的 JSON。当前尚不自动合并整段历史修正。
+
+也可只导出统一 JSON（输出文件必须不存在，且位于原包之外）：
+
+```bash
+.venv/bin/python hocap_adapter.py /home/xrt/Downloads/hocap_hand_v1 \
+  --mano-root /home/xrt/models/mano_v1_2/models \
+  --output ./annotations_hocap/imported_predictions.json
+```
+
+新增依赖 `PyYAML>=6,<7`，已列入 requirements-multiview.txt；没有接入估计器、重新优化或深度约束。测试 `tests/test_hocap_import.py` 覆盖实际包网格/投影、错误配置/模型拒绝、真实 Tk 编辑及保存重载；无本地包或 MANO 资产时跳过。可用 `HOCAP_TEST_ROOT` 指定测试数据包。
