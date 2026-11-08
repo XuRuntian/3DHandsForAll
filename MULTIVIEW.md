@@ -20,7 +20,9 @@ uv pip install --python .venv/bin/python -r requirements-multiview.txt
   --output /path/to/project/final
 ```
 
-`--output` 默认为清单目录的同级 `final/`。已有 final 时优先恢复它，可省略 --input。`--frame-id` 可指定清单中的帧号，默认打开清单第一帧。`--hand-side left/right` 控制初始编辑手。不能向 inputs 目录内写结果。
+`--output` 默认为清单目录的同级 `final/`。不指定 `--input` 时恢复已有 final；显式 `--input` 优先，继续编辑已有修正时不要传入旧预测。`--frame-id` 可指定清单中的帧号，默认打开清单第一帧。`--hand-side left/right` 控制初始编辑手。不能向 inputs 目录内写结果。
+
+固定数据集目录可只传根目录启动，自动选择已有修正或初始预测，见 [快捷启动说明](MANO_INPUT.md#固定数据集目录的快捷启动)。
 
 不带 --project/--multiview 仍使用旧单视角程序。原 `--multiview` 参数仅作为统一清单路径的别名；不再直接加载 HO-Cap 原生目录或旧的单帧 JSON。旧 JSON 文件不会被自动删除或覆盖。
 
@@ -56,7 +58,7 @@ HO-Cap 只是适配器示例，编辑器没有对它的依赖，也不导入其�
 - 方向键沿选中相机方向移动共享三维手，PgUp/PgDn 调深度；Shift 缩小到十分之一步长。在输入框/下拉框/滑块中操作时不触发移动快捷键。
 - 六个视角显示同一只手；一次编辑一只手。没有有效预测的帧/手显示提示、禁用参数控件，不用默认手代替。缺图视角不叠加网格。
 - 手型由当前手整段共享，姿态和平移只影响当前帧。按住微调按钮或连续拖动合并为一条撤销记录。Ctrl+Z 撤销，Ctrl+Y 重做，Ctrl+S 保存。
-- 保存仅更新 final/mano.npz 与固定 metadata.json；不产生逐次 JSON 版本。最终参数不包含截图或推导网格。重新打开时自动恢复 final，恢复载入值不依赖原始预测。
+- 保存仅更新 final/mano.npz 与固定 metadata.json；不产生逐次 JSON 版本。最终参数不包含截图或推导网格。不指定其他输入重新打开时恢复 final，恢复载入值不依赖原始预测。
 
 ## 验证与边界
 

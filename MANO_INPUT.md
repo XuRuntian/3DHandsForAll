@@ -4,6 +4,24 @@
 
 ## 文件与职责
 
+### 固定数据集目录的快捷启动
+
+```bash
+cd ~/3DHandsForAll
+.venv/bin/python pose_annotator.py \
+  ~/test_ego_anno/3D_Trajectory_Continuity_01
+```
+
+只传数据集根目录时，自动读取 `hand_annotations/inputs/manifest.json`，
+优先加载 `hand_annotations/final/mano.npz`；尚无人工结果时加载
+`hand_annotations/predictions/mano.npz`。输出默认是 `hand_annotations/final/`，
+MANO 模型默认 `~/models/mano`，设备默认 CPU。缺少输入会明确报错，不自动运行估计。
+
+原有 `--project`、`--input`、`--output`、`--mano-root` 均可覆盖默认路径。
+显式 `--input` 优先于自动恢复人工结果；不要在想继续已有修正时传入旧预测。
+指定自定义 `--output` 后，自动恢复只检查该输出目录。
+下方更通用的 `predictions/<producer>/` 布局仍需用 `--input` 指定来源。
+
 ```text
 project/
 ├── inputs/manifest.json          # 图片相对路径、帧对应及配套标定

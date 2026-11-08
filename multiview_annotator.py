@@ -39,7 +39,7 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         self.joint_selected = 0
         if self.output == self.sequence.root or self.output.is_relative_to(self.sequence.root):
             raise ValueError('final 必须位于图像清单输入目录之外。')
-        initial_input = self.output / 'mano.npz' if (self.output / 'mano.npz').exists() else args.input
+        initial_input = args.input or (self.output / 'mano.npz' if (self.output / 'mano.npz').exists() else None)
         if not initial_input:
             raise ValueError('首次使用需要 --input 指定统一 mano.npz；工具不运行估计或生成默认预测。')
         self.output_revision = revision(self.output)

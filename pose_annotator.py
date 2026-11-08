@@ -1208,16 +1208,8 @@ class pose_annotation_app:
         self.update_slider_values_fin4()
         
 def parse():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--project", help="Unified image manifest JSON")
-    parser.add_argument("--multiview", metavar="RGBD_ROOT")
-    parser.add_argument("--mano-root", default=params.MANO_PATH)
-    parser.add_argument("--hand-side", choices=("left", "right"), default="right")
-    parser.add_argument("--output", default=None)
-    parser.add_argument("--input", help="Unified multiview mano.npz (metadata.json alongside)")
-    parser.add_argument("--frame-id", default=None)
-    parser.add_argument("--device", default="cpu")
-    return parser.parse_args()
+    from annotation_cli import parse_args
+    return parse_args(legacy_mano_root=params.MANO_PATH)
 
 if __name__ == '__main__':
     args = parse()
