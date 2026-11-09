@@ -133,10 +133,14 @@ def open_sequence(root):
     return MultiViewSequence(root)
 
 
-def mesh_overlay(image, camera, vertices, faces, size=None):
+def mesh_overlay(image, camera, vertices, faces, size=None, alpha=.75):
     """Distorted wire mesh on unrectified RGB. No hidden-surface removal."""
+    if not 0 <= alpha <= 1:
+        raise ValueError('Overlay alpha must be between 0 and 1')
     size = size or camera.size
     out = cv2.resize(image, size)
+    if alpha == 0:
+        return out
     xy, valid = camera.project(vertices)
     xy *= np.array(size) / np.array(camera.size)
     valid &= (np.abs(xy) < 1e6).all(axis=1)
@@ -144,8 +148,46 @@ def mesh_overlay(image, camera, vertices, faces, size=None):
     if len(triangles):
         layer = out.copy()
         cv2.polylines(layer, np.rint(triangles).astype(np.int32), True, (70, 255, 140), 1, cv2.LINE_AA)
-        out = cv2.addWeighted(out, .25, layer, .75, 0)
+        out = cv2.addWeighted(out, 1-alpha, layer, alpha, 0)
     return out
+
+
+# OpenPose21 topology, also used by EgoHandKit's parquet_mesh renderer.
+HAND_CHAINS = tuple((0, *range(start, start+4)) for start in (1, 5, 9, 13, 17))
+HAND_COLORS = ((255, 135, 80), (85, 200, 255), (120, 225, 110),
+               (235, 160, 255), (255, 215, 70))  # RGB, one color per finger
+
+
+def skeleton_overlay(image, camera, joints, size=None, alpha=.75):
+    """Project 21 MANO joints and 20 bones onto RGB, without modifying the image."""
+    if not 0 <= alpha <= 1:
+        raise ValueError('Overlay alpha must be between 0 and 1')
+    joints = np.asarray(joints)
+    if joints.shape != (21, 3):
+        raise ValueError('Expected OpenPose21 joints with shape (21, 3)')
+    size = size or camera.size
+    out = cv2.resize(image, size)
+    if alpha == 0:
+        return out
+    xy, valid = camera.project(joints)
+    xy *= np.array(size) / np.array(camera.size)
+    valid &= (np.abs(xy) < 1e6).all(axis=1)
+    points = np.zeros((21, 2), dtype=np.int32)
+    points[valid] = np.rint(xy[valid]).astype(np.int32)
+    layer = out.copy()
+    radius = max(2, round(min(size) / 240))
+    thickness = max(1, round(min(size) / 360))
+    for chain, color in zip(HAND_CHAINS, HAND_COLORS):
+        for a, b in zip(chain, chain[1:]):
+            if valid[a] and valid[b]:
+                cv2.line(layer, tuple(points[a]), tuple(points[b]), color, thickness, cv2.LINE_AA)
+    for i in range(21):
+        if valid[i]:
+            color = (245, 245, 245) if i == 0 else HAND_COLORS[(i-1)//4]
+            center = tuple(points[i])
+            cv2.circle(layer, center, radius+1, (25, 25, 25), -1, cv2.LINE_AA)
+            cv2.circle(layer, center, radius, color, -1, cv2.LINE_AA)
+    return cv2.addWeighted(out, 1-alpha, layer, alpha, 0)
 
 
 if __name__ == '__main__':

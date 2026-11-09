@@ -36,6 +36,13 @@ class TestGeometry(CalibratedMano):
     def vertices(self):
         return np.array([[0,0,0], [.03,0,0], [0,.03,0]]) + self.state['transl']
 
+    def geometry(self):
+        joints = np.zeros((21, 3))
+        for finger in range(5):
+            for joint in range(4):
+                joints[1+finger*4+joint] = [(finger-2)*.02, (joint+1)*.02, 0]
+        return self.vertices(), joints + self.state['transl']
+
 
 @unittest.skipUnless(AVAILABLE, 'Needs Tk/display and torch')
 class GuiTests(unittest.TestCase):

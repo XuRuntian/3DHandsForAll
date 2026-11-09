@@ -29,14 +29,25 @@ class CalibratedMano:
         self.snapshots = {}
         self.suspend_edits = False
 
-    def vertices(self):
+    def geometry(self):
+        """Vertices and OpenPose21 joints in master-camera meters, from one pass.
+
+        manopth already appends side-specific fingertips and orders the joints
+        as wrist, thumb, index, middle, ring, pinky (four joints per finger).
+        Do not apply the native MANO-to-OpenPose permutation a second time.
+        """
         with torch.no_grad():
             pose = torch.tensor([self.state['global_orient'] + self.state['pose']],
                                 dtype=torch.float32, device=self.device)
             shape = torch.tensor([self.state['betas']], dtype=torch.float32, device=self.device)
-            vertices, _ = self.layer(pose, shape)
+            vertices, joints = self.layer(pose, shape)
         # manopth emits millimeters; do not use legacy key-bone normalization.
-        return vertices[0].cpu().numpy() / 1000. + np.asarray(self.state['transl'])
+        translation = np.asarray(self.state['transl'])
+        return (vertices[0].cpu().numpy() / 1000. + translation,
+                joints[0].cpu().numpy() / 1000. + translation)
+
+    def vertices(self):
+        return self.geometry()[0]
 
     def set_input_pose_i(self, i, value):
         if not self.suspend_edits:

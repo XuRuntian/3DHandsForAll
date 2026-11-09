@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox, font
 import cv2
 import numpy as np
 from pose_annotator import pose_annotation_app
-from multiview_data import mesh_overlay
+from multiview_data import mesh_overlay, skeleton_overlay
 from multiview_mano import CalibratedMano
 from multiview_layout import MultiViewLayout
 from sequence_store import ManoSequence, revision
@@ -312,14 +312,22 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         if self.mano_fit_tool.suspend_edits or not hasattr(self, 'views'):
             return
         self.checkpoint()
+        self.schedule_render()
+
+    def schedule_render(self):
         if self.pending_render is None:
             self.pending_render = self.window.after(16, self.render)
+
+    def update_display(self, value=None):
+        self.transparency_caption.set(f'{self.transparency.get():.0f}%')
+        self.schedule_render()
 
     def render(self):
         if self.pending_render is not None:
             self.window.after_cancel(self.pending_render)
         self.pending_render = None
-        self.vertices = self.mano_fit_tool.vertices() if self.can_edit() else None  # once for all six views
+        # Both representations use the same MANO pass and calibration in all views.
+        self.vertices, self.joints = self.mano_fit_tool.geometry() if self.can_edit() else (None, None)
         self.display_images = {}
         for cid, view in self.views.items():
             image = self.view_image(cid, self.sequence.cameras[cid].size, self.overlay.get())
@@ -334,7 +342,7 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         self.status.set(('● 未保存修改' if dirty else '已就绪') + ' · 六视角共享当前三维手'
                         + (' · 铺满模式已裁切边缘' if self.fit_mode.get().startswith('铺满') else ''))
         if not self.can_edit():
-            self.status.set('当前帧这只手无有效多视角拟合结果：不显示网格，不能编辑。')
+            self.status.set('当前帧这只手无有效多视角拟合结果：不显示叠加，不能编辑。')
         for i,scale in enumerate(self.global_scales):
             if i<3:
                 value = np.degrees(self.mano_fit_tool.state['global_orient'][i])
@@ -355,8 +363,12 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
     def view_image(self, cid, size, overlay):
         available = not self.project_mode or self.sequence.has_image(self.index,cid)
         if overlay and self.vertices is not None and available:
+            alpha = 1 - self.transparency.get()/100.
+            if self.display_mode.get() == 'skeleton':
+                return skeleton_overlay(self.images[cid], self.sequence.cameras[cid],
+                                        self.joints, size, alpha=alpha)
             return mesh_overlay(self.images[cid], self.sequence.cameras[cid], self.vertices,
-                                self.mano_fit_tool.faces, size)
+                                self.mano_fit_tool.faces, size, alpha=alpha)
         return cv2.resize(self.images[cid], size)
 
     def open_detail(self, cid):
@@ -364,18 +376,21 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         from multiview_viewport import ImageViewport
         from multiview_layout import BG, TEXT
         win = tk.Toplevel(self.window)
-        win.title('相机 ' + cid + ' — 原图／手部网格')
+        win.title('相机 ' + cid + ' — 原图／手部叠加')
         win.geometry('1100x760')
         win.configure(bg=BG)
         bar = tk.Frame(win,bg=BG)
         bar.pack(fill='x',padx=12,pady=10)
         detail = dict(window=win,cid=cid,zoom=tk.DoubleVar(value=1.),
                       overlay=tk.BooleanVar(value=self.overlay.get()))
-        ttk.Checkbutton(bar,text='显示网格',variable=detail['overlay'],
+        ttk.Checkbutton(bar,text='显示叠加',variable=detail['overlay'],
                         command=lambda:self.draw_detail(detail)).pack(side='left')
         self.ui_button(bar,'适应窗口',lambda:self.reset_detail(detail)).pack(side='left',padx=8)
         self.ui_button(bar,'原始尺寸',lambda:self.native_detail(detail)).pack(side='left')
         tk.Label(bar,text='滚轮缩放 · 拖动平移 · 双击复位',bg=BG,fg=TEXT).pack(side='right')
+        displaybar = tk.Frame(win,bg=BG)
+        displaybar.pack(fill='x',padx=12,pady=(0,8))
+        self.build_display_controls(displaybar)
         detail['canvas'] = ImageViewport(win,on_focus=lambda:self.reset_detail(detail))
         detail['canvas'].pack(fill='both',expand=True,padx=12,pady=(0,12))
         self.details.append(detail)

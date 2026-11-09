@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 import numpy as np
 from mano_io import default_parameters, read_annotation, save_revision
-from multiview_data import MultiViewSequence, mesh_overlay
+from multiview_data import MultiViewSequence, mesh_overlay, skeleton_overlay
 
 MODEL_ROOT = Path(os.environ.get('MANO_TEST_ROOT', '/home/xrt/models/mano_v1_2/models'))
 DATA_ROOT = Path(os.environ.get('MULTIVIEW_TEST_DATA', '/home/xrt/Downloads/Perspective_Generalization_09/rgbd'))
@@ -34,6 +34,40 @@ class RealManoTests(unittest.TestCase):
         state = default_parameters('0', side, self.sequence.coordinate_system)
         state['transl'] = [0.,0.,.7]
         return state
+
+    def test_openpose21_geometry_units_tips_and_shared_transforms(self):
+        import cv2
+        from unittest.mock import patch
+        for side in ('left','right'):
+            with self.subTest(side=side):
+                model = CalibratedMano(MODEL_ROOT,self.state(side))
+                with patch.object(model.layer,'forward',wraps=model.layer.forward) as forward:
+                    vertices,joints = model.geometry()
+                    self.assertEqual(forward.call_count,1)
+                self.assertEqual(joints.shape,(21,3))
+                self.assertTrue(np.isfinite(joints).all())
+                tips = [745,319,444 if side=='right' else 445,556,673]
+                np.testing.assert_allclose(joints[[4,8,12,16,20]],vertices[tips],atol=1e-8)
+                # A nonzero shared shape ensures the shaped wrist is not assumed zero.
+                model.state['betas'][0] = .8
+                base_v,base_j = model.geometry()
+                self.assertGreater(np.linalg.norm(base_j-joints),1e-4)
+                model.state['pose'][0] = .4
+                _,posed_j = model.geometry()
+                self.assertGreater(np.linalg.norm(posed_j-base_j),1e-4)
+                model.state['pose'][0] = 0.
+                model.state['global_orient'] = [.1,-.2,.3]
+                rotated_v,rotated_j = model.geometry()
+                rot = cv2.Rodrigues(np.array(model.state['global_orient']))[0]
+                np.testing.assert_allclose(rotated_j,(base_j-base_j[0])@rot.T+base_j[0],atol=1e-7)
+                np.testing.assert_allclose(rotated_v,(base_v-base_j[0])@rot.T+base_j[0],atol=1e-7)
+                model.state['transl'][0] += .025
+                moved_v,moved_j = model.geometry()
+                np.testing.assert_allclose(moved_j-rotated_j,np.tile([.025,0,0],(21,1)),atol=1e-8)
+                np.testing.assert_allclose(moved_v-rotated_v,np.tile([.025,0,0],(778,1)),atol=1e-8)
+                for cid,camera in self.sequence.cameras.items():
+                    raw = self.sequence.images(0)[cid]
+                    self.assertTrue(np.any(skeleton_overlay(raw,camera,moved_j) != raw))
 
     def test_both_models_edit_projection_and_exact_reload(self):
         images = self.sequence.images(0)
@@ -91,6 +125,7 @@ class RealManoTests(unittest.TestCase):
                     app.window.update()
                     app.render()
                     edited = app.vertices.copy()
+                    edited_joints = app.joints.copy()
                     path = app.save()
                     app.restore()
                     self.assertEqual(app.mano_fit_tool.state, original)
@@ -98,6 +133,7 @@ class RealManoTests(unittest.TestCase):
                     app.sync_controls()
                     app.render()
                     np.testing.assert_array_equal(app.vertices, edited)
+                    np.testing.assert_array_equal(app.joints, edited_joints)
                     for label in app.views.values():
                         self.assertIsNotNone(label.photo)
                 app.open_detail('cam03')

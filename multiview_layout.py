@@ -19,6 +19,9 @@ class MultiViewLayout:
         style.map('TButton', background=[('active', '#30465c')])
         style.configure('Accent.TButton', background=ACCENT, foreground=BG)
         style.map('Accent.TButton', background=[('active', '#72ded1')])
+        style.configure('Display.Toolbutton', padding=(10,5), background=CARD, foreground=TEXT)
+        style.map('Display.Toolbutton', background=[('selected', ACCENT), ('active', '#30465c')],
+                  foreground=[('selected', BG)])
         style.configure('TNotebook', background=PANEL, borderwidth=0)
         style.configure('TNotebook.Tab', padding=(10, 8), background=CARD)
         style.map('TNotebook.Tab', background=[('selected', ACCENT)], foreground=[('selected', BG)])
@@ -34,6 +37,9 @@ class MultiViewLayout:
         self.status = tk.StringVar()
         self.frame_caption = tk.StringVar()
         self.overlay = tk.BooleanVar(value=True)
+        self.display_mode = tk.StringVar(value='mesh')
+        self.transparency = tk.DoubleVar(value=25.)
+        self.transparency_caption = tk.StringVar(value='25%')
         self.layout_mode = tk.StringVar(value='专注视图')
         self.fit_mode = tk.StringVar(value='完整显示')
         self.selected_camera = self.sequence.master_id
@@ -218,7 +224,7 @@ class MultiViewLayout:
         stage = tk.Frame(body,bg=BG)
         body.add(stage,minsize=560,stretch='always')
         stage.columnconfigure(0,weight=1)
-        stage.rowconfigure(1,weight=1)
+        stage.rowconfigure(2,weight=1)
         viewbar = tk.Frame(stage,bg=BG)
         viewbar.grid(row=0,column=0,sticky='ew',pady=(0,8))
         modes = ttk.Combobox(viewbar,textvariable=self.layout_mode,values=['六视图','专注视图'],width=8,state='readonly')
@@ -227,11 +233,14 @@ class MultiViewLayout:
         fits = ttk.Combobox(viewbar,textvariable=self.fit_mode,values=['完整显示','铺满（裁切）'],width=9,state='readonly')
         fits.pack(side='left',padx=7)
         fits.bind('<<ComboboxSelected>>',lambda e:self.change_fit())
-        ttk.Checkbutton(viewbar,text='网格',variable=self.overlay,command=self.update_rendered_img).pack(side='left')
+        ttk.Checkbutton(viewbar,text='叠加',variable=self.overlay,command=self.update_display).pack(side='left')
         self.ui_button(viewbar,'复位缩放',self.reset_view).pack(side='right')
         self.ui_button(viewbar,'原图窗口',lambda:self.open_detail(self.selected_camera)).pack(side='right',padx=6)
+        displaybar = tk.Frame(stage,bg=BG)
+        displaybar.grid(row=1,column=0,sticky='ew',pady=(0,8))
+        self.build_display_controls(displaybar)
         self.view_grid = tk.Frame(stage,bg=BG)
-        self.view_grid.grid(row=1,column=0,sticky='nsew')
+        self.view_grid.grid(row=2,column=0,sticky='nsew')
         self.views, self.view_cards, self.view_titles = {}, {}, {}
         for cid in self.sequence.cameras:
             card = tk.Frame(self.view_grid,bg=CARD,highlightthickness=1,highlightbackground=CARD)
@@ -260,6 +269,18 @@ class MultiViewLayout:
         for key,axis,direction in [('Left',0,-1),('Right',0,1),('Up',1,-1),
                                    ('Down',1,1),('Prior',2,-1),('Next',2,1)]:
             self.window.bind('<'+key+'>',lambda e,a=axis,d=direction:self.keyboard_nudge(e,a,d))
+
+    def build_display_controls(self, parent):
+        for label, mode in [('MANO 网格', 'mesh'), ('21 点骨架', 'skeleton')]:
+            ttk.Radiobutton(parent,text=label,variable=self.display_mode,value=mode,
+                            style='Display.Toolbutton',command=self.update_display).pack(side='left',padx=(0,3))
+        tk.Label(parent,text='透明度',bg=BG,fg=TEXT).pack(side='left',padx=(12,5))
+        tk.Scale(parent,from_=0,to=100,resolution=1,variable=self.transparency,
+                 orient='horizontal',showvalue=False,length=110,width=14,sliderlength=24,
+                 bg=BG,fg=TEXT,troughcolor=CARD,activebackground=ACCENT,
+                 highlightthickness=0,bd=0,command=self.update_display).pack(side='left',fill='x',expand=True)
+        tk.Label(parent,textvariable=self.transparency_caption,bg=BG,fg=TEXT,
+                 width=5,anchor='e').pack(side='left')
 
     def ui_button(self, parent, text, action, accent=False):
         return ttk.Button(parent,text=text,style='Accent.TButton' if accent else 'TButton',
