@@ -11,7 +11,7 @@ from pose_annotator import pose_annotation_app
 from multiview_data import mesh_overlay, skeleton_overlay
 from multiview_mano import CalibratedMano
 from multiview_layout import MultiViewLayout
-from sequence_store import ManoSequence, revision
+from sequence_store import ManoSequence, revision, SIDES, FIELDS
 from image_manifest import ImageSequence
 from mano_io import default_parameters
 
@@ -54,16 +54,27 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         self.update_rendered_img()
 
     def configure_chinese_ui(self):
+        # Broken display DPI can shrink Tk's inch-based messagebox wrapping to
+        # a few pixels. Fall back to 96 DPI only for implausibly low scaling.
+        if float(self.window.tk.call('tk', 'scaling')) < .5:
+            self.window.tk.call('tk', 'scaling', 96 / 72)
         # Tk's file picker and standard dialog buttons use its bundled locale.
         self.window.tk.call('package', 'require', 'msgcat')
         self.window.tk.call('::msgcat::mclocale', 'zh_cn')
         available = {name.casefold(): name for name in font.families(self.window)}
+        ui_fonts = ('TkDefaultFont', 'TkTextFont', 'TkMenuFont', 'TkHeadingFont',
+                    'TkCaptionFont', 'TkSmallCaptionFont', 'TkIconFont', 'TkTooltipFont')
+        names = set(font.names(self.window))
+        for name in ui_fonts:
+            if name in names:
+                font.nametofont(name, root=self.window).configure(size=-16)
         for family in ('Noto Sans CJK SC', 'Microsoft YaHei', 'WenQuanYi Micro Hei',
                        'Droid Sans Fallback', 'song ti', 'fangsong ti'):
             if family.casefold() in available:
                 family = available[family.casefold()]
-                for name in ('TkDefaultFont', 'TkTextFont', 'TkMenuFont', 'TkHeadingFont'):
-                    font.nametofont(name, root=self.window).configure(family=family, size=-16)
+                for name in ui_fonts:
+                    if name in names:
+                        font.nametofont(name, root=self.window).configure(family=family)
                 break
 
     def localize_sliders(self):
@@ -129,10 +140,10 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
             self.current_valid = state is not None
             if state is None:
                 # A hidden control placeholder only; never rendered or persisted as valid.
-                state = default_parameters(self.sequence.frame_ids[self.index],self.side,self.sequence.coordinate_system)
+                state = self.document.record(self.index, self.side, include_invalid=True)
             self.mano_fit_tool = CalibratedMano(self.args.mano_root,state,self.args.device)
-            self.original = self.baseline.record(self.index,self.side) or copy.deepcopy(state)
-            self.saved_state = json.dumps(state,sort_keys=True)
+            self.original = self.baseline.record(self.index,self.side,include_invalid=True)
+            self.saved_state = self.edit_signature()
             self.reset_history()
             return
 
@@ -205,15 +216,33 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
 
     def reset_history(self):
         self.undo_stack, self.redo_stack = [], []
-        self.history_state = copy.deepcopy(self.mano_fit_tool.state)
+        self.history_state = self.edit_snapshot()
         self.gesture_active = False
+
+    def edit_snapshot(self):
+        return dict(parameters=copy.deepcopy(self.mano_fit_tool.state), valid=self.current_valid,
+                    repair_status=int(self.document.arrays['repair_status'][self.index, SIDES.index(self.side)]))
+
+    def edit_signature(self):
+        return json.dumps(self.edit_snapshot(), sort_keys=True)
+
+    def apply_snapshot(self, snapshot):
+        self.mano_fit_tool.state = copy.deepcopy(snapshot['parameters'])
+        self.current_valid = snapshot['valid']
+        j = SIDES.index(self.side)
+        self.document.arrays['valid'][self.index, j] = self.current_valid
+        self.document.arrays['repair_status'][self.index, j] = snapshot['repair_status']
+        # Preserve shared-shape undo even when the restored instance is invalid.
+        self.document.arrays['betas'][j] = self.mano_fit_tool.state['betas']
+        for key in FIELDS:
+            self.document.arrays[key][self.index, j] = self.mano_fit_tool.state['pose' if key == 'hand_pose' else key]
+        self.mano_fit_tool.snapshots.clear()
 
     def checkpoint(self):
         if self.document is not None:
-            if not self.current_valid:
-                return
-            self.document.update(self.index,self.side,self.mano_fit_tool.state)
-        state = self.mano_fit_tool.state
+            if self.current_valid:
+                self.document.update(self.index,self.side,self.mano_fit_tool.state)
+        state = self.edit_snapshot()
         if not self.gesture_active and state != self.history_state:
             self.undo_stack.append(self.history_state)
             self.undo_stack = self.undo_stack[-100:]
@@ -234,9 +263,9 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         if not self.undo_stack:
             self.status.set('当前帧没有可撤销的修改')
             return
-        self.redo_stack.append(copy.deepcopy(self.mano_fit_tool.state))
-        self.mano_fit_tool.state = self.undo_stack.pop()
-        self.history_state = copy.deepcopy(self.mano_fit_tool.state)
+        self.redo_stack.append(self.edit_snapshot())
+        self.apply_snapshot(self.undo_stack.pop())
+        self.history_state = self.edit_snapshot()
         self.mano_fit_tool.snapshots.clear()
         self.sync_controls()
         self.update_rendered_img()
@@ -245,9 +274,9 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         if not self.redo_stack:
             self.status.set('当前帧没有可重做的修改')
             return
-        self.undo_stack.append(copy.deepcopy(self.mano_fit_tool.state))
-        self.mano_fit_tool.state = self.redo_stack.pop()
-        self.history_state = copy.deepcopy(self.mano_fit_tool.state)
+        self.undo_stack.append(self.edit_snapshot())
+        self.apply_snapshot(self.redo_stack.pop())
+        self.history_state = self.edit_snapshot()
         self.mano_fit_tool.snapshots.clear()
         self.sync_controls()
         self.update_rendered_img()
@@ -337,12 +366,15 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
             self.view_titles[cid].configure(text=cid + (' · 主相机' if cid==self.sequence.master_id else '') + (' · 缺少图像' if missing else ''))
         self.focus_view.set_image(self.display_images[self.selected_camera])
         side = '左手' if self.side=='left' else '右手'
-        dirty = json.dumps(self.mano_fit_tool.state,sort_keys=True) != self.saved_state
+        dirty = self.edit_signature() != self.saved_state
         self.frame_caption.set(f'帧 {self.sequence.frame_ids[self.index]} / {len(self.sequence.frames)} 帧 · {side}')
         self.status.set(('● 未保存修改' if dirty else '已就绪') + ' · 六视角共享当前三维手'
                         + (' · 铺满模式已裁切边缘' if self.fit_mode.get().startswith('铺满') else ''))
         if not self.can_edit():
-            self.status.set('当前帧这只手无有效多视角拟合结果：不显示叠加，不能编辑。')
+            absent = self.document.arrays['repair_status'][self.index, SIDES.index(self.side)] == 1
+            self.status.set(('未保存 · ' if dirty else '') + ('已标记该帧该侧无手' if absent else '当前帧该侧缺少有效预测'))
+        elif self.document.arrays['repair_status'][self.index, SIDES.index(self.side)] == 2:
+            self.status.set(('未保存 · ' if dirty else '') + '参考帧修复结果 · 待人工核对')
         for i,scale in enumerate(self.global_scales):
             if i<3:
                 value = np.degrees(self.mano_fit_tool.state['global_orient'][i])
@@ -423,18 +455,111 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
     def can_edit(self):
         return self.document is None or self.current_valid
 
+    def mark_absent(self):
+        side = '左手' if self.side == 'left' else '右手'
+        if messagebox.askyesno('标记无手', f'确认帧 {self.sequence.frame_ids[self.index]} 的{side}不存在？', parent=self.window):
+            self.end_gesture()
+            self.document.mark_absent(self.index, self.side)
+            self.current_valid = False
+            self.mano_fit_tool.snapshots.clear()
+            self.checkpoint()
+            self.sync_controls()
+            self.update_rendered_img()
+
+    def repair_from_reference(self, reference):
+        self.end_gesture()
+        self.mano_fit_tool.state = self.document.repair_from(self.index, self.side, reference)
+        self.current_valid = True
+        self.mano_fit_tool.snapshots.clear()
+        self.checkpoint()
+        self.sync_controls()
+        self.update_rendered_img()
+
+    def open_repair(self):
+        from tkinter import ttk
+        from PIL import Image, ImageTk
+        self.end_gesture()
+        candidates = self.document.reference_indices(self.index, self.side)
+        if not candidates:
+            messagebox.showinfo('无可用参考帧', '该侧手没有其他有效预测，无法从参考帧修复。', parent=self.window)
+            return
+        dialog = tk.Toplevel(self.window)
+        side = '左手' if self.side == 'left' else '右手'
+        dialog.title(f'修复帧 {self.sequence.frame_ids[self.index]} · {side}')
+        dialog.transient(self.window)
+        dialog.grab_set()
+        dialog.geometry('960x620')
+        dialog.minsize(600, 420)
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(1, weight=1)
+        bar = ttk.Frame(dialog)
+        bar.grid(row=0, column=0, sticky='ew', padx=12, pady=10)
+        ttk.Label(bar, text='参考帧').pack(side='left')
+        labels = [f'{self.sequence.frame_ids[i]} · {"前" if i < self.index else "后"} {abs(i-self.index)} 帧' for i in candidates]
+        choice = ttk.Combobox(bar, values=labels, state='readonly', width=28)
+        choice.current(0)
+        choice.pack(side='left', padx=8)
+        preview = ttk.Frame(dialog)
+        preview.grid(row=1, column=0, sticky='nsew', padx=12)
+        cells = []
+        for k, cid in enumerate(self.sequence.cameras):
+            preview.columnconfigure(k % 3, weight=1, uniform='camera')
+            preview.rowconfigure(k // 3, weight=1, uniform='camera')
+            cell = tk.Canvas(preview, width=1, height=1, highlightthickness=0, bg='#202020')
+            cell.grid(row=k // 3, column=k % 3, sticky='nsew', padx=2, pady=2)
+            cells.append((cid, cell))
+        preview_images = {}
+        photos = []
+        def draw(event=None):
+            photos.clear()
+            for cid, cell in cells:
+                if cid not in preview_images:
+                    continue
+                img = Image.fromarray(preview_images[cid])
+                img.thumbnail((max(1, cell.winfo_width()), max(1, cell.winfo_height()-24)))
+                photo = ImageTk.PhotoImage(img, master=dialog)
+                photos.append(photo)
+                cell.delete('all')
+                cell.create_image(cell.winfo_width()/2, 24, image=photo, anchor='n')
+                cell.create_text(8, 10, text=cid, fill='white', anchor='w')
+        def load_preview(event=None):
+            apply.configure(state='disabled')
+            preview_images.clear()
+            reference = candidates[choice.current()]
+            model = CalibratedMano(self.args.mano_root, self.document.record(reference, self.side), self.args.device)
+            vertices, _ = model.geometry()
+            for cid, img in self.sequence.images(reference).items():
+                preview_images[cid] = (mesh_overlay(img, self.sequence.cameras[cid], vertices, model.faces)
+                                       if self.sequence.has_image(reference, cid) else img)
+            draw()
+            apply.configure(state='normal')
+        def accept():
+            self.repair_from_reference(candidates[choice.current()])
+            dialog.destroy()
+        buttons = ttk.Frame(dialog)
+        buttons.grid(row=2, column=0, sticky='ew', padx=12, pady=10)
+        ttk.Button(buttons, text='取消', command=dialog.destroy).pack(side='right')
+        apply = ttk.Button(buttons, text='采用此参考帧', command=lambda: self.safe(accept))
+        apply.pack(side='right', padx=8)
+        choice.bind('<<ComboboxSelected>>', lambda e: self.safe(load_preview))
+        preview.bind('<Configure>', draw)
+        for _, cell in cells:
+            cell.bind('<Configure>', draw)
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
+        self.safe(load_preview)
+
     def save(self):
         if self.document is not None:
             self.checkpoint()
             path = self.document.save(self.output,self.output_revision)
             self.output_revision = revision(self.output)
-            self.saved_state = json.dumps(self.mano_fit_tool.state,sort_keys=True)
+            self.saved_state = self.edit_signature()
             self.status.set('已保存整段：' + str(path))
             return path
     def stash(self):
         if self.document is not None:
             self.checkpoint()
-            if json.dumps(self.mano_fit_tool.state,sort_keys=True) != self.saved_state:
+            if self.edit_signature() != self.saved_state:
                 self.save()
             return
 
@@ -479,7 +604,10 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
             self.update_rendered_img()
 
     def restore(self):
-        self.mano_fit_tool.state = copy.deepcopy(self.original)
+        j = SIDES.index(self.side)
+        self.apply_snapshot(dict(parameters=self.original,
+                                 valid=bool(self.baseline.arrays['valid'][self.index, j]),
+                                 repair_status=int(self.baseline.arrays['repair_status'][self.index, j])))
         self.mano_fit_tool.snapshots.clear()
         self.sync_controls()
         self.update_rendered_img()
@@ -557,5 +685,5 @@ def _require_valid_hand(method):
 
 
 for _name in ['set_shape', 'apply_exact', 'nudge', 'rotate_nudge', 'adjust_global_component',
-              'adjust_shape', 'apply_global_value', 'restore']:
+              'adjust_shape', 'apply_global_value']:
     setattr(MultiViewApp, _name, _require_valid_hand(getattr(MultiViewApp, _name)))

@@ -43,7 +43,7 @@ class ManoSequence:
         if not isinstance(digest,str) or len(digest)!=64 or any(c not in '0123456789abcdef' for c in digest):
             raise ValueError('Missing or invalid image manifest fingerprint')
         a=self.arrays
-        if set(a)!={'frame_ids','betas','valid',*FIELDS}:
+        if set(a)-{'repair_status'}!={'frame_ids','betas','valid',*FIELDS}:
             raise ValueError('Unexpected or missing MANO arrays')
         ids=a['frame_ids']
         if ids.ndim!=1 or ids.dtype.kind not in 'US' or not len(ids) or len(set(ids.tolist()))!=len(ids):
@@ -53,6 +53,13 @@ class ManoSequence:
         n=len(ids)
         if a['valid'].shape!=(n,2) or a['valid'].dtype!=np.bool_:
             raise ValueError('valid must be bool [T,2]')
+        if 'repair_status' not in a:
+            a['repair_status'] = np.zeros((n, 2), dtype=np.uint8)
+        status = a['repair_status']
+        if status.shape != (n, 2) or status.dtype != np.uint8 or not np.isin(status, [0, 1, 2]).all():
+            raise ValueError('repair_status must be uint8 [T,2]: 0 original, 1 absent, 2 repaired')
+        if np.any((status == 1) & a['valid']) or np.any((status == 2) & ~a['valid']):
+            raise ValueError('repair_status disagrees with valid')
         for key,shape in [('betas',(2,10))]+[(k,(n,2,d)) for k,d in FIELDS.items()]:
             v=a[key]
             if v.shape!=shape or v.dtype.kind!='f' or not np.isfinite(v).all():
@@ -76,9 +83,9 @@ class ManoSequence:
             for k in FIELDS:a[k][i,j]=state['pose' if k=='hand_pose' else k]
         return cls(a,meta)
 
-    def record(self,index,side):
+    def record(self,index,side,include_invalid=False):
         j=SIDES.index(side)
-        if not self.arrays['valid'][index,j]:return None
+        if not include_invalid and not self.arrays['valid'][index,j]:return None
         state=default_parameters(str(self.arrays['frame_ids'][index]),side,self.meta['coordinate_system'])
         state['betas']=self.arrays['betas'][j].tolist()
         for k in FIELDS:state['pose' if k=='hand_pose' else k]=self.arrays[k][index,j].tolist()
@@ -97,12 +104,34 @@ class ManoSequence:
         if not set(self.arrays['frame_ids']).issubset(frame_ids):
             raise ValueError('MANO contains frames absent from image manifest')
         a=dict(frame_ids=np.asarray(frame_ids,dtype=str),betas=self.arrays['betas'].copy(),
-               valid=np.zeros((len(frame_ids),2),dtype=bool))
+               valid=np.zeros((len(frame_ids),2),dtype=bool),
+               repair_status=np.zeros((len(frame_ids),2),dtype=np.uint8))
         a.update({k:np.zeros((len(frame_ids),2,d)) for k,d in FIELDS.items()})
         for old,fid in enumerate(self.arrays['frame_ids']):
             new=frame_ids.index(str(fid))
-            for k in ['valid',*FIELDS]:a[k][new]=self.arrays[k][old]
+            for k in ['valid','repair_status',*FIELDS]:a[k][new]=self.arrays[k][old]
         return ManoSequence(a,self.meta)
+
+    def reference_indices(self, index, side):
+        j = SIDES.index(side)
+        return sorted((i for i in range(len(self.arrays['frame_ids']))
+                       if i != index and self.arrays['valid'][i, j]),
+                      key=lambda i: (abs(i-index), i))
+
+    def mark_absent(self, index, side):
+        j = SIDES.index(side)
+        self.arrays['valid'][index, j] = False
+        self.arrays['repair_status'][index, j] = 1
+
+    def repair_from(self, index, side, reference):
+        if reference not in self.reference_indices(index, side):
+            raise ValueError('Reference must be another valid frame of the same hand')
+        j = SIDES.index(side)
+        for key in FIELDS:
+            self.arrays[key][index, j] = self.arrays[key][reference, j]
+        self.arrays['valid'][index, j] = True
+        self.arrays['repair_status'][index, j] = 2
+        return self.record(index, side)
 
     @classmethod
     def load(cls,path,coordinate_system=None,manifest_sha256=None):
