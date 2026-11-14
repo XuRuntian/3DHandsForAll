@@ -36,8 +36,12 @@ class ManoSequence:
 
     def validate(self):
         expected = metadata(self.meta.get('coordinate_system'),self.meta.get('image_manifest_sha256'))
-        if self.meta != expected or not isinstance(expected['coordinate_system'],str):
+        core = {k: v for k, v in self.meta.items() if k != 'reconstruction'}
+        if core != expected or not isinstance(expected['coordinate_system'],str):
             raise ValueError('Unsupported MANO metadata; requires complete multiview fitted parameters')
+        # Reconstruction provenance is informational, not a display-camera filter.
+        if 'reconstruction' in self.meta and not isinstance(self.meta['reconstruction'], dict):
+            raise ValueError('Reconstruction metadata must be an object')
         validate(default_parameters('0','right',expected['coordinate_system']))
         digest = expected['image_manifest_sha256']
         if not isinstance(digest,str) or len(digest)!=64 or any(c not in '0123456789abcdef' for c in digest):

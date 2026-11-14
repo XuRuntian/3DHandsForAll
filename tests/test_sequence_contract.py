@@ -43,6 +43,36 @@ def gui_args(root, model_root='unused'):
 
 
 class SequenceContractTests(unittest.TestCase):
+    def test_reconstruction_metadata_survives_load_align_edit_save(self):
+        with tempfile.TemporaryDirectory() as root:
+            seq, doc = fixture(root)
+            meta = copy.deepcopy(doc.meta)
+            meta['reconstruction'] = {
+                'camera_selection': 'multiview_consistency',
+                'included_camera_ids': ['cam00', 'cam01', 'cam03', 'cam04', 'cam05'],
+                'excluded_cameras': [{'camera_id': 'cam02', 'reason': 'persistent_geometric_inconsistency'}],
+                'diagnostics_file': 'camera_consistency.json',
+                'diagnostics_sha256': 'a' * 64,
+                'triangulation_method': 'pairwise_consensus_inlier_refinement_v1',
+            }
+            enriched = ManoSequence(doc.arrays, meta)
+            path = enriched.save(Path(root) / 'new_predictions')
+            loaded = ManoSequence.load(path, seq.coordinate_system, seq.manifest_sha256)
+            aligned = loaded.aligned(seq.frame_ids)
+            state = aligned.record(0, 'right')
+            state['transl'][0] = .2
+            aligned.update(0, 'right', state)
+            final = aligned.save(Path(root) / 'final')
+            reloaded = ManoSequence.load(final)
+            self.assertEqual(reloaded.meta, meta)
+            self.assertEqual(reloaded.record(0, 'right')['transl'][0], .2)
+            self.assertEqual(len(seq.cameras), 6)
+            for key, value in [('reconstruction', []), ('units', 'millimeter'), ('unexpected', {})]:
+                invalid = copy.deepcopy(meta)
+                invalid[key] = value
+                with self.assertRaises(ValueError):
+                    ManoSequence(doc.arrays, invalid)
+
     def test_sparse_valid_shared_shape_and_atomic_save(self):
         with tempfile.TemporaryDirectory() as root:
             seq,doc=fixture(root)
