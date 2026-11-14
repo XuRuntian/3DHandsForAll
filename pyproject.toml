@@ -1,0 +1,32 @@
+[project]
+name = "3dhandsforall"
+version = "0.1.0"
+description = "Multi-view MANO hand annotation and manual correction"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "numpy==1.23.5",
+    "opencv-python==4.10.0.84",
+    "Pillow>=10,<13",
+    "scipy>=1.10,<1.16",
+    "chumpy==0.70",
+    "manopth",
+    "PyYAML>=6,<7",
+    "torch==2.5.1",
+]
+
+[tool.uv]
+package = false
+required-version = ">=0.9.16"
+
+[tool.uv.sources]
+manopth = { git = "https://github.com/hassony2/manopth.git", rev = "4f1dcad1201ff1bfca6e065a85f0e3456e1aa32b" }
+torch = { index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+# chumpy's legacy setup.py imports pip while generating build metadata.
+[tool.uv.extra-build-dependencies]
+chumpy = ["pip", "setuptools<81"]

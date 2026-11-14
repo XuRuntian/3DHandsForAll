@@ -1,3 +1,4 @@
+# Legacy manual installation only. Prefer uv sync (pyproject.toml + uv.lock).
 # Python 3.10 with Tk. CPU is sufficient; torch installed separately (see MULTIVIEW.md).
 numpy==1.23.5
 opencv-python==4.10.0.84

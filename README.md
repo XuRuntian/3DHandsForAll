@@ -10,6 +10,22 @@ Download link for Ego2HandsPose:
 [test](https://app.box.com/s/wwze8ksixxinixkiq79eb84kulhdb8zm)
 
 ## Environment Setup
+
+### Multi-view editor (recommended)
+
+The multi-view editor uses a locked uv environment (Python 3.10, CPU PyTorch):
+
+```bash
+uv sync
+uv run python pose_annotator.py --help
+```
+
+See [MULTIVIEW.md](MULTIVIEW.md) for MANO assets, input data, launch commands,
+and migrating an existing environment. This environment does not include the
+legacy single-view CUDA/PyTorch3D prediction and fitting pipeline below.
+
+### Legacy single-view editor
+
 * We used the following steps to set up the proper environment in Anaconda on a Windows 10 machine:
   > conda create --name hand3d_env python=3.7\
   > conda activate hand3d_env\
