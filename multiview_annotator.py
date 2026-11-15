@@ -35,6 +35,8 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         self.side = args.hand_side
         self.source = None
         self.pending_render = None
+        self.pending_frame_seek = None
+        self.frame_seek_target = None
         self.is_debugging = False
         self.joint_selected = 0
         if self.output == self.sequence.root or self.output.is_relative_to(self.sequence.root):
@@ -337,6 +339,35 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
             raise ValueError('找不到此帧号，请输入数据中的同步帧编号。')
         self.navigate(self.sequence.frame_ids.index(fid)-self.index)
 
+    def sync_timeline(self):
+        if hasattr(self, 'timeline_position'):
+            # Set the variable, not Scale.set(), to avoid invoking its command.
+            self.timeline_position.set(self.index)
+            self.timeline_caption.set(f'{self.index + 1} / {len(self.sequence.frames)}')
+
+    def cancel_frame_seek(self):
+        if getattr(self, 'pending_frame_seek', None) is not None:
+            self.window.after_cancel(self.pending_frame_seek)
+        self.pending_frame_seek = None
+        self.frame_seek_target = None
+
+    def queue_frame_seek(self, value):
+        index = max(0, min(len(self.sequence.frames)-1, int(float(value) + .5)))
+        if index == self.index:
+            self.cancel_frame_seek()
+            return
+        self.frame_seek_target = index
+        # Coalesce mouse motion so six-image loading does not queue every pixel.
+        if self.pending_frame_seek is None:
+            self.pending_frame_seek = self.window.after(80, self.flush_frame_seek)
+
+    def flush_frame_seek(self):
+        target = self.frame_seek_target
+        self.cancel_frame_seek()
+        if target is not None:
+            self.safe(lambda: self.navigate(target-self.index))
+        self.sync_timeline()
+
     def update_rendered_img(self):
         if self.mano_fit_tool.suspend_edits or not hasattr(self, 'views'):
             return
@@ -456,6 +487,8 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         return self.document is None or self.current_valid
 
     def mark_absent(self):
+        self.cancel_frame_seek()
+        self.sync_timeline()
         side = '左手' if self.side == 'left' else '右手'
         if messagebox.askyesno('标记无手', f'确认帧 {self.sequence.frame_ids[self.index]} 的{side}不存在？', parent=self.window):
             self.end_gesture()
@@ -478,6 +511,8 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
     def open_repair(self):
         from tkinter import ttk
         from PIL import Image, ImageTk
+        self.cancel_frame_seek()
+        self.sync_timeline()
         self.end_gesture()
         candidates = self.document.reference_indices(self.index, self.side)
         if not candidates:
@@ -564,6 +599,13 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
             return
 
     def navigate(self, delta):
+        self.cancel_frame_seek()
+        try:
+            self._navigate(delta)
+        finally:
+            self.sync_timeline()
+
+    def _navigate(self, delta):
         if delta == 0:
             return
         index = self.index + delta
@@ -583,6 +625,8 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         self.update_rendered_img()
 
     def switch_side(self):
+        self.cancel_frame_seek()
+        self.sync_timeline()
         self.stash()
         previous = self.side
         self.side = 'left' if self.side == 'right' else 'right'
@@ -595,6 +639,8 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         self.update_rendered_img()
 
     def load(self):
+        self.cancel_frame_seek()
+        self.sync_timeline()
         path = filedialog.askopenfilename(parent=self.window, title='加载 MANO 预测或修正结果',
                                           filetypes=[('统一 MANO 参数文件', '*.npz')])
         if path:
@@ -613,6 +659,7 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         self.update_rendered_img()
 
     def close(self):
+        self.cancel_frame_seek()
         try:
             self.stash()
         except Exception as exc:

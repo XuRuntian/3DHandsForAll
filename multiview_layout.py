@@ -28,6 +28,9 @@ class MultiViewLayout:
         style.configure('TCombobox', padding=4, arrowcolor=TEXT, selectbackground=CARD, selectforeground=TEXT)
         style.map('TCombobox', fieldbackground=[('readonly', CARD)], foreground=[('readonly', TEXT)], selectbackground=[('readonly', CARD)])
         style.configure('Vertical.TScrollbar', background=CARD, troughcolor=PANEL, arrowcolor=MUTED, borderwidth=0, width=12)
+        style.configure('Timeline.Horizontal.TScale', background=ACCENT, troughcolor=CARD,
+                        bordercolor=CARD, lightcolor=ACCENT, darkcolor=ACCENT)
+        style.map('Timeline.Horizontal.TScale', background=[('disabled', MUTED), ('active', '#72ded1')])
         style.configure('TCheckbutton', background=BG, indicatorbackground=CARD, indicatorforeground=ACCENT)
         style.map('TCheckbutton', indicatorbackground=[('selected', ACCENT)], background=[('active', BG)])
         self.window.option_add('*TCombobox*Listbox.background', CARD)
@@ -53,8 +56,10 @@ class MultiViewLayout:
         tk.Label(header, text='共享三维手 · 逐帧审核', bg=BG, fg=MUTED).pack(side='left', padx=16)
         self.ui_button(header, '保存修正  Ctrl+S', self.save, accent=True).pack(side='right')
         self.ui_button(header, '加载结果', self.load).pack(side='right', padx=8)
-        nav = tk.Frame(self.window, bg=PANEL)
-        nav.pack(fill='x', padx=16, pady=(0, 10))
+        navigation = tk.Frame(self.window, bg=PANEL)
+        navigation.pack(fill='x', padx=16, pady=(0, 10))
+        nav = tk.Frame(navigation, bg=PANEL)
+        nav.pack(fill='x')
         self.ui_button(nav, '‹ 上一帧', lambda: self.navigate(-1)).pack(side='left', padx=(8,4), pady=7)
         self.ui_button(nav, '下一帧 ›', lambda: self.navigate(1)).pack(side='left')
         tk.Label(nav, textvariable=self.frame_caption, bg=PANEL, fg=TEXT).pack(side='left', padx=14)
@@ -66,6 +71,22 @@ class MultiViewLayout:
         self.ui_button(nav, '切换左／右手', self.switch_side).pack(side='right', padx=8)
         self.ui_button(nav, '重做', self.redo_edit).pack(side='right', padx=3)
         self.ui_button(nav, '撤销', self.undo_edit).pack(side='right', padx=3)
+        timeline_row = tk.Frame(navigation, bg=PANEL)
+        timeline_row.pack(fill='x', padx=12, pady=(0, 8))
+        self.timeline_position = tk.DoubleVar(value=self.index)
+        self.timeline_caption = tk.StringVar()
+        self.timeline = ttk.Scale(timeline_row, from_=0,
+                                  to=max(1, len(self.sequence.frames)-1),
+                                  orient='horizontal', variable=self.timeline_position,
+                                  style='Timeline.Horizontal.TScale',
+                                  command=self.queue_frame_seek)
+        self.timeline.pack(side='left', fill='x', expand=True)
+        self.timeline.bind('<ButtonRelease-1>', lambda e: self.flush_frame_seek(), add='+')
+        if len(self.sequence.frames) == 1:
+            self.timeline.state(['disabled'])
+        tk.Label(timeline_row, textvariable=self.timeline_caption, bg=PANEL, fg=MUTED,
+                 width=16, anchor='e').pack(side='right', padx=(10, 0))
+        self.sync_timeline()
         body = tk.PanedWindow(self.window, orient='horizontal', bg=BG, bd=0,
                               sashwidth=10, sashpad=2, opaqueresize=True)
         self.workspace_split = body
