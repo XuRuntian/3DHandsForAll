@@ -58,7 +58,7 @@ class RepairStorageTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get('DISPLAY'), 'Needs display')
 class RepairGuiTests(unittest.TestCase):
-    def test_repair_undo_absence_restore_autosave_and_resume(self):
+    def test_repair_undo_absence_restore_manual_save_and_resume(self):
         from multiview_annotator import MultiViewApp
         from test_multiview_gui import TestGeometry
         with tempfile.TemporaryDirectory() as root, patch('multiview_annotator.CalibratedMano', TestGeometry):
@@ -89,6 +89,8 @@ class RepairGuiTests(unittest.TestCase):
                 self.assertTrue(app.can_edit())
                 app.redo_edit()
                 app.navigate(1)
+                self.assertFalse((Path(root)/'final/mano.npz').exists())
+                app.save()
                 disk = ManoSequence.load(Path(root)/'final')
                 self.assertEqual(disk.arrays['repair_status'][1, 0], 1)
                 app.navigate(-1)

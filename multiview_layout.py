@@ -264,6 +264,7 @@ class MultiViewLayout:
         self.ui_button(viewbar,'原图窗口',lambda:self.open_detail(self.selected_camera)).pack(side='right',padx=6)
         displaybar = tk.Frame(stage,bg=BG)
         displaybar.grid(row=1,column=0,sticky='ew',pady=(0,8))
+        self.ui_button(displaybar,'三维视图',self.open_3d_view).pack(side='right',padx=6)
         self.build_display_controls(displaybar)
         self.view_grid = tk.Frame(stage,bg=BG)
         self.view_grid.grid(row=2,column=0,sticky='nsew')

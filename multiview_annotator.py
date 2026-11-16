@@ -145,7 +145,6 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
                 state = self.document.record(self.index, self.side, include_invalid=True)
             self.mano_fit_tool = CalibratedMano(self.args.mano_root,state,self.args.device)
             self.original = self.baseline.record(self.index,self.side,include_invalid=True)
-            self.saved_state = self.edit_signature()
             self.reset_history()
             return
 
@@ -160,6 +159,7 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
             CalibratedMano(self.args.mano_root,candidate,self.args.device)
             self.document = document
             self.baseline = copy.deepcopy(document)
+            self.saved_arrays = {key: value.copy() for key, value in document.arrays.items()}
             self.source = str(Path(path).resolve())
             if Path(path).resolve() == self.output / 'mano.npz':
                 self.output_revision = loaded_revision
@@ -388,6 +388,8 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
         self.pending_render = None
         # Both representations use the same MANO pass and calibration in all views.
         self.vertices, self.joints = self.mano_fit_tool.geometry() if self.can_edit() else (None, None)
+        if getattr(self, 'mano_viewer', None) is not None:
+            self.update_3d_view()
         self.display_images = {}
         for cid, view in self.views.items():
             image = self.view_image(cid, self.sequence.cameras[cid].size, self.overlay.get())
@@ -397,7 +399,7 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
             self.view_titles[cid].configure(text=cid + (' · 主相机' if cid==self.sequence.master_id else '') + (' · 缺少图像' if missing else ''))
         self.focus_view.set_image(self.display_images[self.selected_camera])
         side = '左手' if self.side=='left' else '右手'
-        dirty = self.edit_signature() != self.saved_state
+        dirty = self.has_unsaved_changes()
         self.frame_caption.set(f'帧 {self.sequence.frame_ids[self.index]} / {len(self.sequence.frames)} 帧 · {side}')
         self.status.set(('● 未保存修改' if dirty else '已就绪') + ' · 六视角共享当前三维手'
                         + (' · 铺满模式已裁切边缘' if self.fit_mode.get().startswith('铺满') else ''))
@@ -433,6 +435,32 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
             return mesh_overlay(self.images[cid], self.sequence.cameras[cid], self.vertices,
                                 self.mano_fit_tool.faces, size, alpha=alpha)
         return cv2.resize(self.images[cid], size)
+
+    def open_3d_view(self):
+        from mano_viewer import ManoViewer
+        if getattr(self, 'mano_viewer', None) is None:
+            self.mano_viewer = ManoViewer()
+            self.viewer_models = {}
+        self.checkpoint()
+        self.update_3d_view()
+        self.mano_viewer.open()
+
+    def update_3d_view(self):
+        hands = []
+        for side in SIDES:
+            state = self.document.record(self.index, side)
+            if state is None:
+                continue
+            if side == self.side:
+                model = self.mano_fit_tool
+            else:
+                if side not in self.viewer_models:
+                    self.viewer_models[side] = CalibratedMano(self.args.mano_root, state, self.args.device)
+                model = self.viewer_models[side]
+                model.state = state
+            vertices, _ = model.geometry()
+            hands.append(dict(side=side, vertices=vertices.tolist(), faces=model.faces.tolist()))
+        self.mano_viewer.update(self.sequence.frame_ids[self.index], hands)
 
     def open_detail(self, cid):
         from tkinter import ttk
@@ -588,15 +616,17 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
             self.checkpoint()
             path = self.document.save(self.output,self.output_revision)
             self.output_revision = revision(self.output)
-            self.saved_state = self.edit_signature()
+            self.saved_arrays = {key: value.copy() for key, value in self.document.arrays.items()}
             self.status.set('已保存整段：' + str(path))
             return path
     def stash(self):
         if self.document is not None:
             self.checkpoint()
-            if self.edit_signature() != self.saved_state:
-                self.save()
             return
+
+    def has_unsaved_changes(self):
+        return any(not np.array_equal(value, self.saved_arrays[key])
+                   for key, value in self.document.arrays.items())
 
     def navigate(self, delta):
         self.cancel_frame_seek()
@@ -645,6 +675,9 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
                                           filetypes=[('统一 MANO 参数文件', '*.npz')])
         if path:
             self.stash()
+            if self.has_unsaved_changes() and not messagebox.askyesno(
+                    '放弃未保存修改', '加载其他结果将放弃整段未保存修改，是否继续？', parent=self.window):
+                return
             self._read(path)
             self.sync_controls()
             self.update_rendered_img()
@@ -660,12 +693,12 @@ class MultiViewApp(MultiViewLayout, pose_annotation_app):
 
     def close(self):
         self.cancel_frame_seek()
-        try:
-            self.stash()
-        except Exception as exc:
-            messagebox.showerror('保存失败，窗口保持打开', self.error_text(exc), parent=self.window)
-            return
+        if self.pending_render is not None:
+            self.window.after_cancel(self.pending_render)
+            self.pending_render = None
         self.window.destroy()
+        if getattr(self, 'mano_viewer', None) is not None:
+            self.mano_viewer.close()
 
 
 # Programmatic slider synchronization must never quantize imported parameters.

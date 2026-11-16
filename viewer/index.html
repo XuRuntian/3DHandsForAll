@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MANO 三维视图</title>
+<style>
+*{box-sizing:border-box;letter-spacing:0}body{margin:0;background:#202323;color:#eee;font:15px system-ui}canvas{display:block;width:100%;height:100%;touch-action:none}header{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;flex-wrap:wrap;gap:16px;padding:14px;background:#202323e8}h1{font-size:18px;margin:0}button{background:transparent;color:white;border:1px solid #777;border-radius:4px;font-size:22px;width:38px;height:36px;cursor:pointer}label{white-space:nowrap}#status{position:absolute;bottom:16px;left:16px;right:16px;color:#ccc}#right{accent-color:#67d7b1}#left{accent-color:#e5a2ce}
+</style>
+<header><h1>MANO 三维视图</h1><span id="frame"></span><label><input id="right" type="checkbox" checked>右手</label><label><input id="left" type="checkbox" checked>左手</label><label><input id="wire" type="checkbox">线框</label><button id="reset" title="复位视角" aria-label="复位视角">↺</button></header>
+<div id="status">正在连接编辑器…</div>
+<script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script>
+<script type="module" src="./viewer.js"></script></html>

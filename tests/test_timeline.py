@@ -51,7 +51,7 @@ class TimelineTests(unittest.TestCase):
             time.sleep(.005)
         self.assertFalse(self.errors, self.errors)
 
-    def test_seek_sparse_frames_save_edits_and_sync_existing_navigation(self):
+    def test_seek_sparse_frames_retains_edits_without_saving(self):
         app = self.make_app()
         original = Path(app.args.input).read_bytes()
         app.mano_fit_tool.state['transl'][0] = .123
@@ -61,8 +61,9 @@ class TimelineTests(unittest.TestCase):
         self.assertEqual(app.sequence.frame_ids[app.index], '25')
         self.assertFalse(app.can_edit())
         self.assertFalse(app.timeline.instate(['disabled']))
-        saved = ManoSequence.load(app.output)
-        self.assertAlmostEqual(saved.record(0, 'right')['transl'][0], .123)
+        self.assertFalse((app.output/'mano.npz').exists())
+        self.assertAlmostEqual(app.document.record(0, 'right')['transl'][0], .123)
+        self.assertTrue(app.has_unsaved_changes())
         app.timeline.set(2)
         self.pump(app)
         self.assertEqual(app.sequence.frame_ids[app.index], '80')
@@ -92,7 +93,7 @@ class TimelineTests(unittest.TestCase):
         app.flush_frame_seek()
         self.assertEqual(app.timeline_position.get(), 1)
 
-    def test_load_or_save_error_keeps_frame_and_resets_slider(self):
+    def test_image_error_keeps_frame_and_navigation_never_saves(self):
         app = self.make_app()
         with patch('multiview_annotator.messagebox.showerror') as error:
             with patch.object(app.sequence, 'images', side_effect=ValueError('missing image')):
@@ -104,10 +105,10 @@ class TimelineTests(unittest.TestCase):
             with patch.object(app.document, 'save', side_effect=OSError('disk full')):
                 app.timeline.set(1)
                 app.flush_frame_seek()
-            self.assertEqual(app.index, 0)
-            self.assertEqual(app.timeline_position.get(), 0)
-            self.assertAlmostEqual(app.mano_fit_tool.state['transl'][0], .456)
-            self.assertEqual(error.call_count, 2)
+            self.assertEqual(app.index, 1)
+            self.assertEqual(app.timeline_position.get(), 1)
+            self.assertAlmostEqual(app.document.record(0, 'right')['transl'][0], .456)
+            self.assertEqual(error.call_count, 1)
 
     def test_single_frame_and_programmatic_sync_do_not_navigate(self):
         app = self.make_app(single=True)
